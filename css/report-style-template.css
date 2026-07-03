@@ -1,0 +1,66 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a1628; color: #c8d6e5; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; padding: 20px; line-height: 1.6; }
+  h1 { color: #fff; font-size: 1.8rem; margin-bottom: 6px; }
+  .report-date { color: #8892b0; font-size: 0.95rem; margin-bottom: 20px; }
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 30px; }
+  .stat-box { background: #112240; border: 1px solid #1e3a5f; border-radius: 8px; padding: 12px 18px; text-align: center; min-width: 100px; }
+  .stat-box .num { font-size: 1.6rem; font-weight: 700; color: #64ffda; }
+  .stat-box .num-red { font-size: 1.6rem; font-weight: 700; color: #f87171; }
+  .stat-box .num-orange { font-size: 1.6rem; font-weight: 700; color: #fb923c; }
+  .stat-box .num-green { font-size: 1.6rem; font-weight: 700; color: #22c55e; }
+  /* Counter colour guide: .num = mint (default), .num-red = Rejections + Failed Interviews, .num-orange = Pending, .num-green = Interviews */
+  .stat-box .lbl { font-size: 0.75rem; color: #8892b0; text-transform: uppercase; letter-spacing: 0.5px; }
+  .section-title { font-size: 1.3rem; color: #fff; margin: 30px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #1e3a5f; }
+  .interview-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-bottom: 10px; }
+  .interview-card { background: #14532d; border: 1px solid #22c55e; border-radius: 10px; padding: 18px; box-shadow: 0 0 15px rgba(34,197,94,0.2); }
+  .interview-card .company { color: #22c55e; font-weight: 700; font-size: 1.05rem; }
+  .interview-card .title { color: #e2e8f0; font-size: 0.9rem; margin: 4px 0 8px; }
+  .interview-card .comment { color: #bbf7d0; font-size: 0.82rem; }
+  .failed-details { margin-bottom: 24px; }
+  .failed-details summary { cursor: pointer; font-size: 1.3rem; color: #fff; padding-bottom: 8px; border-bottom: 2px solid #7f1d1d; margin-bottom: 16px; list-style: none; display: flex; align-items: center; gap: 8px; }
+  .failed-details summary::-webkit-details-marker { display: none; }
+  .failed-details summary::after { content: ' ▶'; font-size: 0.85rem; color: #f87171; }
+  .failed-details[open] summary::after { content: ' ▼'; }
+  .failed-table { width: 100%; border-collapse: collapse; }
+  .failed-table th { background: #4a1f1f; color: #fca5a5; padding: 10px 12px; text-align: left; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  .failed-table td { background: #3b1a1a; border: 1px solid #7f1d1d; padding: 10px 12px; font-size: 0.88rem; color: #e2d8d8; }
+  .failed-table .company-name { color: #f87171; font-weight: 600; }
+  .failed-wrap { border: 1px solid #7f1d1d; border-radius: 8px; overflow: hidden; }
+  .followup-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  .followup-table th { background: #4a3f2c; color: #f5e6c8; padding: 10px 12px; text-align: left; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  .followup-table td { background: #3d3525; border: 1px solid #5a4d35; padding: 10px 12px; font-size: 0.88rem; color: #e2d8c8; }
+  .followup-table .company-name { color: #b8a472; font-weight: 600; }
+  .followup-table a { color: #64b5f6; text-decoration: none; }
+  .followup-table a:hover { text-decoration: underline; }
+  .followup-wrap { border: 1px solid #b8a472; border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+  .hp-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 10px; }
+  .hp-card { background: #112240; border: 1px solid #1e3a5f; border-radius: 10px; padding: 20px; position: relative; transition: transform 0.15s; }
+  .hp-card:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+  .hp-card .score-badge { position: absolute; top: 14px; right: 14px; background: #64ffda; color: #0a1628; font-weight: 800; font-size: 1.1rem; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+  .hp-card .company { color: #64ffda; font-weight: 700; font-size: 1.05rem; }
+  .hp-card .title { color: #e2e8f0; font-size: 0.95rem; margin: 4px 0 2px; }
+  .hp-card .location { color: #8892b0; font-size: 0.82rem; margin-bottom: 4px; }
+  .hp-card .salary-line { color: #fbbf24; font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; }
+  .hp-card .reasons { list-style: none; padding: 0; margin: 10px 0; }
+  .hp-card .reasons li { color: #a8b2d1; font-size: 0.82rem; padding: 2px 0; padding-left: 16px; position: relative; }
+  .hp-card .reasons li::before { content: '•'; position: absolute; left: 0; color: #64ffda; }
+  .hp-card .flags { margin: 8px 0; }
+  .flag { font-size: 0.78rem; display: inline-block; padding: 0 2px; margin-right: 4px; margin-bottom: 4px; }
+  .flag-red { color: #ef4444; }
+  .flag-green { color: #22c55e; }
+  .hp-card .btn { display: inline-block; margin-top: 10px; padding: 8px 18px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.85rem; background: #1e3a5f; color: #64ffda; border: 1px solid #2d5a8e; }
+  .hp-card .btn:hover { background: #2d5a8e; }
+  .btn-rejected { background: rgba(239,68,68,0.15) !important; color: #ef4444 !important; border-color: #ef4444 !important; }
+  .btn-applied { background: rgba(251,146,60,0.15) !important; color: #fb923c !important; border-color: #fb923c !important; }
+  .status-applied { color: #fb923c; font-weight: 600; }
+  .status-rejected { color: #ef4444; font-weight: 600; }
+  .data-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  .data-table th { background: #1a2744; color: #8892b0; padding: 10px 12px; text-align: left; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #1e3a5f; }
+  .data-table td { background: #112240; border-bottom: 1px solid #1e3a5f; padding: 10px 12px; font-size: 0.88rem; }
+  .data-table tr:hover td { background: #152a50; }
+  .data-table .company-name { color: #64ffda; font-weight: 600; }
+  .data-table a { color: #64b5f6; text-decoration: none; }
+  .data-table a:hover { text-decoration: underline; }
+  .table-wrap { border: 1px solid #1e3a5f; border-radius: 8px; overflow: hidden; }
+  .nogo-badge { font-size: 0.78rem; }
+  .note { color: #8892b0; font-size: 0.8rem; font-style: italic; margin: 8px 0 20px; }

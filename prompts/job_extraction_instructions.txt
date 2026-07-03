@@ -1,0 +1,11 @@
+Extract all job postings from LinkedIn job-alert emails. For each job:
+- Job title
+- Company
+- Location
+- salary range
+- number of applicants
+- Apply link
+- Summary (2–3 lines)
+- Seniority level
+- name and link to the LinkedIn profile of the hiring manager
+- Keywords detected

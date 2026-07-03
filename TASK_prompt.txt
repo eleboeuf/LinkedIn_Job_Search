@@ -1,0 +1,377 @@
+BEFORE STARTING ANY TASK — Read these files from this folder:
+- config.json  (always first)
+- prompts/job_extraction_instructions.txt
+- prompts/scoring_rubric.txt
+- skills/check-job-status/SKILL.md
+- skills/read-all-alert-emails/SKILL.md
+- cache/jobs_seen_cache.json  (if it exists — skip silently if not)
+- cache/jobs_page_cache.json  (if it exists — skip silently if not)
+Read prompts/CV_master.txt ONLY if use_cv_for_scoring is true in config.json.
+Do not proceed until all required files are loaded. The local skill files are the authoritative
+version — they override any cached version of these skills in AppData.
+
+From config.json, extract:
+- gmail_job_alerts_label → use this as the Gmail label for LinkedIn job alert emails
+- gmail_job_applications_label → use this as the Gmail label for job application/rejection emails
+- alerts_lookback_days → use this as the number of days of alert emails to scan (default: 2)
+- application_lookback_days → use this as the number of days to search back for applications
+- use_cv_for_scoring → if true, include prompts/CV_master.txt in scoring; if false, score against rubric only (default: false)
+- job_page_recheck_days → number of days before re-checking an open job's LinkedIn page (default: 7)
+- applications_archive_after_months → number of months of inactivity before a cache/applications_cache.json
+  entry is moved to cache/applications_archive.json (default: 6)
+If config.json is missing or a value is absent, fall back to: “Linkedin Alerts”, “Jobs”, 2, 120, false, 7, 6.
+
+Only read emails from the Gmail label defined in gmail_job_alerts_label. Ignore all other folders.
+
+Every morning, scan the last N days of emails (as defined by alerts_lookback_days in config.json) in the Gmail label defined in gmail_job_alerts_label.
+
+1. Extract all job postings using prompts/job_extraction_instructions.txt.
+   For each job, extract the LinkedIn job ID from the apply URL
+   (e.g. https://www.linkedin.com/jobs/view/4123456789/ → job ID "4123456789").
+2. DEDUPLICATION — for each extracted job:
+   a. If the same job ID appears in multiple alert emails → keep one instance only.
+   b. Check cache/jobs_seen_cache.json: if the job ID already exists in seen_jobs →
+      use the cached score, reasons, and flags — do NOT re-score.
+      Update first_seen only if it is newer than the stored value (keep oldest).
+   c. If job ID is not in the cache → score it (step 3) and add to cache/jobs_seen_cache.json.
+   After processing all jobs, save cache/jobs_seen_cache.json with last_updated set to now.
+3. Score each unseen job using prompts/scoring_rubric.txt.
+   If use_cv_for_scoring is true → also reference prompts/CV_master.txt for fit assessment.
+   If use_cv_for_scoring is false → use the rubric only; do NOT reference the CV.
+4. Produce a ranked shortlist from highest to lowest score.
+5. For each job, include:
+   - Title
+   - Company
+   - Location
+   - Salary range (ALWAYS display when published in the LinkedIn listing —
+     extract from alert email body or check the LinkedIn job page. Show in
+     cards and as a dedicated Salary column in tables. Leave blank only if
+     genuinely not published.)
+   - Score (0–100)
+   - 3–5 bullet reasons for the score
+   - Apply link
+   - Red flags
+6. Flag any roles scoring above 75 as “High Priority”.
+7. APPLICATION CACHE — load cache/applications_cache.json (in this folder) to determine applied/rejected
+   status. This replaces scanning all historical emails on every run.
+
+   STRUCTURE of cache/applications_cache.json:
+   {
+     "last_processed_at": "<ISO 8601 UTC timestamp>",
+     "applications": [
+       {
+         "company": "Acme Corp",
+         "title": "Head of Partnerships",
+         "events": [
+           {
+             "applied_date": "YYYY-MM-DD or null",
+             "rejected_date": "YYYY-MM-DD or null",
+             "application_email_id": "<Gmail message id or null>",
+             "rejection_email_id": "<Gmail message id or null>"
+           }
+         ]
+       }
+     ]
+   }
+   Multiple applications to the same role are stored as multiple objects in "events".
+
+   STEP 7a — UPDATE THE CACHE before generating the report:
+   a. If cache/applications_cache.json does not exist (first run / bootstrap):
+      - Scan ALL emails in gmail_job_applications_label received in the past
+        application_lookback_days days (from config.json).
+      - Build cache/applications_cache.json from scratch using the matching rules below.
+      - Set last_processed_at to the current UTC timestamp and save the file.
+   b. If cache/applications_cache.json exists:
+      - Read last_processed_at from the file.
+      - Scan ONLY emails in gmail_job_applications_label received AFTER last_processed_at
+        (delta scan — typically 0 to a handful of emails).
+      - Process each new email using the matching rules below.
+      - Update last_processed_at to the current UTC timestamp and save the file.
+
+   MATCHING RULES — normalise company name and job title before matching
+   (lowercase, strip punctuation, trim whitespace):
+   - Application confirmation email:
+       • Find existing entry (company + title) where the most recent event has
+         rejected_date: null (a pending application).
+       • If found → this is a re-application: append a NEW event to the events array
+         (applied_date set, rejected_date: null). Store Gmail id in application_email_id.
+       • If not found → create a new entry with one event (applied_date set,
+         rejected_date: null). Store Gmail id in application_email_id.
+   - Rejection email:
+       • Find existing entry (company + title) where the most recent event has
+         rejected_date: null.
+       • If found → set rejected_date on that event. Store Gmail id in rejection_email_id.
+       • If not found in cache/applications_cache.json (application was missed, OR the entry has
+         already been archived — see STEP 7c) → FALLBACK: search cache/applications_archive.json
+         for an entry (company + title) whose most recent event has rejected_date: null.
+           - If found in the archive → move that entry BACK into cache/applications_cache.json,
+             set rejected_date on its most recent event, and store the Gmail id in
+             rejection_email_id. Decrement archived_count and archived_pending in
+             cache/applications_archive.json (the entry now lives in the live cache, so it is
+             counted there instead of in the archive).
+           - If not found anywhere (no cache match, no archive match) → create a new entry
+             in cache/applications_cache.json with one event (applied_date: null, rejected_date
+             set). Store Gmail id in rejection_email_id.
+       This fallback only runs when the live-cache lookup misses — it is not a per-run scan
+       of the archive, only an occasional check on unmatched rejection emails.
+   - Skip any email whose Gmail message id already exists in the cache OR the archive
+     (already processed).
+
+   STEP 7c — ARCHIVE STALE ENTRIES (runs once per calendar month, not on every run):
+   Check last_archived_at in cache/applications_archive.json (if the file doesn't exist yet,
+   treat last_archived_at as absent and proceed). If last_archived_at falls in the SAME
+   calendar month and year as today → skip this step entirely (already run this month).
+   Otherwise (different month/year, or archive file doesn't exist yet) → run the archiving
+   pass below, then set last_archived_at to now.
+   This intentionally does not require the run to fall exactly on the 1st — it triggers on
+   the first run of a new calendar month, so a skipped day on the 1st doesn't delay
+   archiving until the following month.
+
+   For each entry in cache/applications_cache.json, find its most recent event (by applied_date,
+   or rejected_date if applied_date is missing). If that date is older than
+   applications_archive_after_months months ago (from config.json) — regardless of whether
+   the entry is rejected or still pending with no response — move the entry from
+   cache/applications_cache.json to cache/applications_archive.json.
+   cache/applications_archive.json structure:
+   {
+     "archived_count": <int>,
+     "archived_rejected": <int>,   // archived entries whose most recent event is rejected
+     "archived_pending": <int>,    // archived entries whose most recent event is still pending
+     "last_archived_at": "<ISO 8601 UTC timestamp>",
+     "applications": [ ...entries... ]
+   }
+   If cache/applications_archive.json does not exist, create it with zeroed counters and an empty
+   applications array before archiving. Update archived_count / archived_rejected /
+   archived_pending to stay in sync with the applications array whenever entries are added
+   to or removed from the archive (including the fallback move-back in the MATCHING RULES
+   above). cache/applications_cache.json's last_processed_at is unaffected by archiving.
+
+   STEP 7d — USE THE CACHE IN THE REPORT:
+   For each job in today's report, look up company + title in cache/applications_cache.json only
+   (archived entries are historical and won't correspond to jobs in a current report).
+   Status is determined by the MOST RECENT event in the events array:
+   - applied_date set, rejected_date null → 🟠 Applied <date>
+   - rejected_date set → 🔴 Rejected <date>
+   - No match → no status badge.
+8. Load inputs/job_feedback.json (in this folder) for NOGO / skip / closed / interview overrides.
+   - If inputs/job_feedback.json does not exist, create it as an empty array [] and continue.
+   - Jobs with status_override “skip” → flag as ⛔ NOGO with the comment.
+   - Jobs with status_override “closed” → flag as 🔒 Closed.
+   - Jobs with status_override “interview” → show in the Open Interviews section.
+   - Jobs with status_override “follow-up” → show in the Follow-up section.
+   - NOGO jobs stay visible in the report but are not actionable.
+8b. LINKEDIN PAGE VISITS — check cache/jobs_page_cache.json before visiting any page.
+   For each job, apply the following rules in order:
+
+   SKIP (no Chrome visit needed):
+   - Job is already marked status_override “closed” in inputs/job_feedback.json → skip.
+   - Job ID is in cache/jobs_page_cache.json with open: false → skip (closed is permanent;
+     if the role reopens LinkedIn assigns a new job ID).
+   - Job ID is in cache/jobs_page_cache.json with open: true AND the job does NOT appear
+     in the current report (scored too low / excluded) AND checked_date is within
+     job_page_recheck_days → skip.
+
+   RE-CHECK (visit the page):
+   - Job ID is in cache/jobs_page_cache.json with open: true AND the job DOES appear
+     in the current report AND checked_date is older than job_page_recheck_days → visit.
+   - Job ID is NOT in cache/jobs_page_cache.json → visit (first time seen).
+
+   For every page visited, check two things:
+   a. Is it still accepting applications? Look for “No longer accepting
+      applications” or similar closed indicators. Any closed role → flag as
+      🔒 Closed, move to Excluded section, add to inputs/job_feedback.json with
+      status_override “closed”.
+   b. Is a salary range published? Extract it and display in the report
+      (in cards and as a Salary column in tables).
+   c. How many applicants? Extract the applicant count if shown.
+
+   After each visit, update cache/jobs_page_cache.json:
+   {
+     “job_id”: {
+       “url”: “https://www.linkedin.com/jobs/view/<id>/”,
+       “title”: “...”,
+       “company”: “...”,
+       “open”: true/false,
+       “salary”: “...” or null,
+       “applicants”: 127 or null,
+       “checked_date”: “YYYY-MM-DD”
+     }
+   }
+   Save cache/jobs_page_cache.json with last_updated set to now after all visits complete.
+
+   ⚠️  ENFORCEMENT: Jobs that require a visit MUST all be visited — not 5, not 10,
+   ALL of them. Use a subagent (model: "haiku" — this step is mechanical extraction:
+   open/closed status, salary text, applicant count; use Sonnet if results look
+   unreliable) to batch-check all required LinkedIn URLs in one pass.
+   Do NOT proceed to step 9 until every required job has been visited and logged.
+   If a subagent times out, spawn another to finish.
+9. Save the output file to the `reports/` subfolder as `reports/daily-job-report-YYYY-MM-DD.html` (using today's date).
+   Output — a clean HTML dashboard with a DARK BLUE theme (navy background
+   #0a1628, dark blue cards #112240, light text — never white/light backgrounds)
+   and four sections:
+   HEADER — At the very top of the report, always display:
+   - Title: "LinkedIn Job Report"
+   - Subtitle: "<Day DD Month YYYY> • Automated scan of Linkedin Alerts (last <alerts_lookback_days> days)"
+   - A row of summary counter cards in this exact order:
+       1. APPLICATIONS — (count of entries in cache/applications_cache.json where at least one
+          event has application_email_id OR rejection_email_id set) + archived_count from
+          cache/applications_archive.json. Mint colour (#64ffda).
+       2. REJECTIONS — (count of entries in cache/applications_cache.json where at least one
+          event has rejection_email_id set) + archived_rejected from
+          cache/applications_archive.json. Red colour (#f87171).
+       3. PENDING — APPLICATIONS minus REJECTIONS (applications with no rejection received).
+          Orange colour (#fb923c). This is equivalent to (live pending entries) +
+          archived_pending from cache/applications_archive.json.
+          Do NOT read every entry in cache/applications_archive.json for this calculation —
+          use the archived_count / archived_rejected / archived_pending summary counters
+          at the top of the file, not a full scan of its applications array.
+       4. INTERVIEWS — count of jobs with status_override "interview". Bright green colour (#22c55e).
+       5. FAILED INTERVIEWS — count of jobs with status_override "failed_interview". Red colour (#f87171).
+       6. JOBS FOUND — total number of jobs in the report (excluding already-closed)
+       7. HIGH PRIORITY — jobs scoring ≥ 75, not NOGO/closed
+       8. FOLLOW-UPS — count of jobs with status_override "follow-up"
+       9. CLOSED — count of jobs marked 🔒 Closed
+       CSS classes for coloured numbers: .num (mint), .num-red (red #f87171), .num-orange (orange #fb923c).
+       Add these to the .stat-box CSS block at the top of every report.
+   Counter cards use dark blue background (#112240), mint/teal accent colour (#64ffda),
+   grey label text, and rounded borders matching the rest of the dashboard.
+
+   MANDATORY STYLE REFERENCE — Use the CSS template in `css/report-style-template.css` in the `css/` folder.
+   This file is the canonical styling for all daily reports. Key colours:
+     Accent: #64ffda (mint green) — stat numbers, company names, score badges, buttons, bullet markers
+     Borders: #1e3a5f throughout
+     Links: #64b5f6
+     Salary: #fbbf24
+   Do NOT deviate from this template unless the user explicitly requests a change.
+   a0. 🎯 Open Interviews cards: all jobs with status_override "interview" in
+       inputs/job_feedback.json. Show company name, job title, and comment. Display at
+       the very top of the report, before High Priority. These are roles the
+       user is actively interviewing for — they may or may not appear in today's
+       alert emails. Cards must use a green background (#14532d), bright green
+       border (#22c55e), and a green glow (box-shadow rgba(34,197,94,0.2)).
+   a0b. 💔 Failed Interviews — collapsible section, displayed just before the Follow-up table.
+       Use a native HTML <details>/<summary> element so it is collapsed by default.
+       Summary label: "💔 Failed Interviews (click to expand)"
+       When expanded, show a table with columns: Date, Title, Company, Comment.
+       Sorted by date descending (most recent first).
+       Source: all entries in inputs/job_feedback.json with status_override "failed_interview".
+       Table styling: dark red background (#3b1a1a), dark red border (#7f1d1d),
+       header background (#4a1f1f), company names in muted red (#f87171).
+   a1. 📌 Follow-up table: all jobs with status_override "follow-up" in
+       inputs/job_feedback.json. Display as a table with columns: Applied (date),
+       Company, Job Title (linked to the LinkedIn job page from the url field —
+       plain text if no url), Comment, Hiring Team (name linked to their
+       LinkedIn profile from hiring_manager_name / hiring_manager_linkedin
+       fields — show "—" if blank), L1 Contacts (from the L1_contacts array
+       field — display rules: if empty → show "—"; if 1–3 contacts → show each
+       contact's name as a clickable link to their LinkedIn profile,
+       comma-separated; if 4 or more contacts → show "N contacts" as a single
+       link to L1_contacts_url). There is NO separate Link column — the job URL
+       is embedded in the Job Title. Sorted by application date newest first.
+       Each json entry has an L1_contacts array of {name, url} objects populated
+       when the L1 search is run. This array is the source of truth for the cell
+       display — always render from L1_contacts, not from L1_contacts_url directly.
+       Display just below Open Interviews and before High Priority. These
+       are roles the user has applied to and wants to track. Table must use
+       a beige background (#3d3525), warm beige border (#b8a472), header
+       background (#4a3f2c), and company names in beige (#b8a472).
+       In the Comment column, do NOT repeat the applied date — it is already
+       shown in the Applied column. Only include additional context (e.g.
+       "Reapplied 19/06", "Contacted CRO, no response"). Leave blank if
+       there is nothing beyond the application date to say.
+   a. ⭐ High Priority cards: score ≥ 75, not NOGO/closed.
+   b. 📋 Other Roles table: ALL partnership/channel/ecosystem/alliance/GTM roles
+      regardless of score, PLUS any other role scoring ≥ 50.
+   c. 🚫 Excluded table: 🔒 Closed roles (no longer accepting applications),
+      PLUS non-partnership roles (e.g. pre-sales, account executive, technical,
+      generic account manager) scoring < 50.
+   - Each section sorted by descending score.
+   - Status badges: 🟠 Applied, 🔴 Rejected, ⛔ NOGO, 🔒 Closed.
+   - In tables AND cards, the Status field should show ONLY "Applied <date>"
+     or "Rejected <date>" — e.g. "Applied Jun 11", "Rejected Feb 2026".
+     No emoji badges, no notes, no extra context. Colour-code: applied in
+     orange, rejected in red (use CSS classes, not inline styles).
+     NOGO/closed rows are NOT greyed out (no reduced opacity/colour change) —
+     the ⛔/🔒 icons are sufficient to convey status.
+   - For High Priority cards, colour the "View Job →" button to match status:
+     applied → orange (btn-applied), rejected → red (btn-rejected).
+     Use CSS classes, not inline styles.
+10b. URL FIELD — inputs/job_feedback.json entries have a "url" field for the LinkedIn job page.
+    MANDATORY: whenever adding or updating any entry in inputs/job_feedback.json (follow-up,
+    interview, failed_interview, skip, closed, or any other status), populate the "url"
+    field as follows:
+    - If the user's command includes a LinkedIn URL → use it directly.
+    - If no URL is provided → search LinkedIn using Company Name + Title
+      (via Chrome browser tools: navigate to
+      https://www.linkedin.com/jobs/search/?keywords="TITLE"+"COMPANY"
+      and extract the currentJobId from the URL of the first exact match).
+      Set "url" to https://www.linkedin.com/jobs/view/<jobId>/
+    - If the LinkedIn listing cannot be found (0 results or removed) → set "url" to "".
+    Never leave "url" unset or null when a search was possible.
+    The Follow-up table Link column must always render this url as a clickable link.
+    Each entry also has "hiring_manager_name" and "hiring_manager_linkedin" fields.
+    Populate these whenever the user provides the hiring manager's name or LinkedIn
+    profile URL in their command. Rules:
+    - If the user provides both name and URL → use both directly.
+    - If the user provides only a LinkedIn URL (no name) → navigate to that profile
+      via Chrome browser tools and extract the full name from the page title or
+      heading. Set hiring_manager_name to the resolved name.
+    - If the user provides only a name (no URL) → set hiring_manager_name and
+      leave hiring_manager_linkedin blank.
+    - Leave both fields blank if not provided — do not attempt to auto-discover
+      hiring managers unless explicitly asked.
+    NEVER display "View Profile" in the Follow-up table — always resolve the name
+    before writing the HTML. The Hiring Manager cell must always show the person's
+    full name as the link text (or "—" if no hiring manager is known).
+    Each entry also has an "L1_contacts_url" field storing the LinkedIn people
+    search URL filtered to 1st-degree connections at that company:
+      https://www.linkedin.com/search/results/people/?currentCompany=%5B%22COMPANY_ID%22%5D&network=%5B%22F%22%5D
+    MANDATORY — L1_contacts_url must be populated automatically whenever:
+    - A new entry is created in inputs/job_feedback.json (any status), OR
+    - The company name of an existing entry is changed.
+    Process to build L1_contacts_url:
+    1. Navigate to https://www.linkedin.com/search/results/companies/?keywords=COMPANY_NAME
+       via Chrome browser tools.
+    2. Identify the correct company in the results (match name and industry context).
+    3. Navigate to that company's LinkedIn page.
+    4. Extract the numeric company ID from the page DOM:
+         document.body.innerHTML.match(/urn:li:fsd_company:(\d+)/)
+       The FIRST match is the company's own ID.
+    5. Set L1_contacts_url to:
+         https://www.linkedin.com/search/results/people/?currentCompany=%5B%22ID%22%5D&network=%5B%22F%22%5D
+    6. Navigate to that search URL and read the page text to extract 1st-degree contacts:
+       - Count how many "• 1st" results appear.
+       - If 0 contacts → set L1_contacts_url to "" and L1_contacts to [].
+       - If 1–3 contacts → extract each person's name and profile URL
+         (use document.querySelectorAll('a[href*="/in/"]') and match against names
+         in the page text). Store as L1_contacts: [{name, url}, ...].
+       - If 4+ contacts → leave L1_contacts as [] (display handled via L1_contacts_url).
+    7. If the company cannot be found on LinkedIn, or the page is unavailable,
+       set L1_contacts_url to "" and L1_contacts to []. Do NOT leave either unset.
+
+10. ALWAYS regenerate the HTML dashboard after any update to inputs/job_feedback.json
+    (new entries, status changes, comment edits). The report must stay in sync.
+    FAILED INTERVIEW SHORTCUT — when the user reports a failed interview without
+    requesting a full report run, do the following WITHOUT re-running the full project:
+    a. Add the entry to inputs/job_feedback.json with status_override "failed_interview".
+    b. Find the most recent HTML report in the reports/ folder.
+    c. Update ONLY the 💔 Failed Interviews collapsible table in that report:
+       insert the new row at the top (most recent first), sorted by date descending.
+    d. Do NOT touch any other section of the report.
+11. Red flags and green flags:
+   - Do NOT flag "Industry not aligned with CX/CPaaS/CCaaS/AI" as a red flag.
+   - Instead, show a green flag (✅) when industry IS aligned (CPaaS, CCaaS,
+     CX, Conversational AI, SaaS, Cloud Communications).
+   - Red flags should only highlight genuine concerns: seniority too junior,
+     function not partnerships, location unclear, recruitment agency, etc.
+   - MANDATORY FORMATTING: In BOTH High Priority cards AND the Other Roles
+     table Notes column, every flag MUST use HTML span tags:
+       Red flag:   <span class="flag flag-red">⚠ reason</span>
+       Green flag: <span class="flag flag-green">✅ reason</span>
+     Plain text flags (e.g. bare "⚠ text") are NOT acceptable — they render
+     without colour. The CSS .flag class is global (not scoped to .hp-card),
+     so these spans work correctly in both cards and table cells.
+   - FLAGS ARE TEXT-ONLY — no pill/chip backgrounds. The .flag-red and
+     .flag-green classes apply colour to the text only; they do NOT add any
+     background-color. Do NOT add inline background styles to flag spans.
+     The original card/cell background must always show through. 

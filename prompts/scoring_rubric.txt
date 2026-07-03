@@ -1,0 +1,40 @@
+## Please adapt the example below to create your Personal Scorecard against your Ideal Job Profile ##
+
+SCORING RUBRIC — JOB MATCH (0–100)
+
+Score each job using the following weighted criteria:
+
+1. ROLE ALIGNMENT — 40 points
+- Seniority match (VP, Head of, Director, Lead): 20
+- Function match (Partnerships, Alliances, Enterprise Sales, GTM, Channel, GSI, Partner Ecosystem): 20
+
+2. INDUSTRY FIT — 20 points
+- cPaaS, CCaaS, CX, AI, SaaS, Cloud, Communications Platforms, Conversational AI, Agentic AI: 20
+
+3. EXPERIENCE MATCH — 20 points
+- Partner ecosystem development
+- Partner-sourced ARR & pipeline creation
+- Joint GTM strategy & execution
+- Channel/Alliances leadership (VAR, SI, GSI)
+- Technology & integration partnerships (ISV/SI/API‑first)
+- AI‑driven GTM & partner‑led commercial motions
+- Partner enablement frameworks
+- Co‑selling & co‑marketing programs
+- MDF planning & ROI optimisation
+- Executive stakeholder management
+- Multi‑million‑pound deal negotiation
+- Cross‑functional leadership across Sales, Product, Marketing
+- Partner program governance & performance optimisation
+- Market expansion through ecosystem partnerships
+(Allocate up to 20 based on relevance)
+
+4. LOCATION & WORK MODEL — 10 points
+- UK-based, Hybrid, or Remote-friendly: 10
+
+5. COMPANY QUALITY — 10 points
+- SaaS scale-up, strong funding, reputable brand, AI-led: 10
+
+OUTPUT FORMAT:
+- Total score (0–100)
+- 3–5 bullet reasons for the score
+- Red flags (if any)
