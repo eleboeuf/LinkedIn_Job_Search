@@ -2,7 +2,7 @@
 
 ## Why this project exists
 
-Job hunting on LinkedIn is time-consuming. This project automates it: every morning, Claude reads your LinkedIn job alert emails, scores each role against your CV and target criteria, and produces a ranked HTML dashboard so you spend your time applying — not searching.
+Job hunting on LinkedIn is time-consuming. This project automates it: every morning, Claude reads your LinkedIn job alert emails, scores each role against your profile, and produces a ranked HTML dashboard so you spend your time applying — not searching.
 
 ---
 
