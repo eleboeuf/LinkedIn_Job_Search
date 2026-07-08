@@ -1,5 +1,3 @@
-## Please adapt the example below to create your Personal Scorecard against your Ideal Job Profile ##
-
 SCORING RUBRIC — JOB MATCH (0–100)
 
 Score each job using the following weighted criteria:
@@ -26,7 +24,7 @@ Score each job using the following weighted criteria:
 - Cross‑functional leadership across Sales, Product, Marketing
 - Partner program governance & performance optimisation
 - Market expansion through ecosystem partnerships
-(Allocate up to 20 based on relevance)
+(Allocate up to 25 based on relevance)
 
 4. LOCATION & WORK MODEL — 10 points
 - UK-based, Hybrid, or Remote-friendly: 10
