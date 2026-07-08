@@ -61,6 +61,11 @@
   .data-table .company-name { color: #64ffda; font-weight: 600; }
   .data-table a { color: #64b5f6; text-decoration: none; }
   .data-table a:hover { text-decoration: underline; }
+  /* Status column must never wrap to two lines. Position differs per table
+     (Other Roles has a Salary column before Status, Excluded does not), so each
+     table carries an extra class to target the correct column: */
+  .roles-table th:nth-child(6), .roles-table td:nth-child(6) { white-space: nowrap; }
+  .excluded-table th:nth-child(5), .excluded-table td:nth-child(5) { white-space: nowrap; }
   .table-wrap { border: 1px solid #1e3a5f; border-radius: 8px; overflow: hidden; }
   .nogo-badge { font-size: 0.78rem; }
   .note { color: #8892b0; font-size: 0.8rem; font-style: italic; margin: 8px 0 20px; }
