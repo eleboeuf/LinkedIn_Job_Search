@@ -24,7 +24,7 @@ Claude Desktop (Cowork mode) runs the workflow daily. It reads your Gmail, visit
 
 Ideally most people would love to search LinkedIn directly, however due to a lack of Open Interface, this is proving difficult. The workaround is to use LinkedIn job alerts. Having created several of these alerts set to daily frequency, I found that many roles appeared repeatedly across multiple alerts, some I had already applied to, and others were no longer accepting applications — resulting in a lot of time wasted checking the same jobs over and over again. This is now a thing of the past.
 
-In order to overcome these challenges the automation looks at the LinkedIn Job alerts received in a set period (by default 1 day), creates a unique list of jobs (eliminating duplicates), scores the job against the CV profile, identifies those jobs already applied or rejected and displays relevant jobs in a prioritised list ready to apply.
+In order to overcome these challenges the automation looks at the LinkedIn Job alerts received in a set period (by default 2 days), creates a unique list of jobs (eliminating duplicates), scores the job against the CV profile, identifies those jobs already applied or rejected and displays relevant jobs in a prioritised list ready to apply.
 
 Duplicates are identified by **company + job title + location**, not just company + title: the same role reposted under a new LinkedIn job ID (with the same location) is recognised as a repost and only scored once, while the same job title posted by the same company for two different locations (e.g. London and Manchester) is correctly treated as two separate roles and scored independently.
 
