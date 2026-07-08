@@ -4,8 +4,6 @@
 
 Job hunting on LinkedIn is time-consuming. This project automates it: every morning, Claude reads your LinkedIn job alert emails, scores each role against your CV and target criteria, and produces a ranked HTML dashboard so you spend your time applying — not searching.
 
-📄 [See a sample report](_sample_data/daily-job-report-2026-07-08-anonymised.html) — an anonymised example of the daily HTML dashboard this automation produces.
-
 **Report overview** — header stats, collapsible Open Interviews / Failed Interviews / Follow-up sections:
 
 ![Report overview — header stats, Open Interviews, Failed Interviews, Follow-up](_sample_data/screenshot-overview.png)
