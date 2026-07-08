@@ -2,7 +2,21 @@
 
 ## Why this project exists
 
-Job hunting on LinkedIn is time-consuming. This project automates it: every morning, Claude reads your LinkedIn job alert emails, scores each role against your profile, and produces a ranked HTML dashboard so you spend your time applying — not searching.
+Job hunting on LinkedIn is time-consuming. This project automates it: every morning, Claude reads your LinkedIn job alert emails, scores each role against your CV and target criteria, and produces a ranked HTML dashboard so you spend your time applying — not searching.
+
+📄 [See a sample report](_sample_data/daily-job-report-2026-07-08-anonymised.html) — an anonymised example of the daily HTML dashboard this automation produces.
+
+**Report overview** — header stats, collapsible Open Interviews / Failed Interviews / Follow-up sections:
+
+![Report overview — header stats, Open Interviews, Failed Interviews, Follow-up](_sample_data/screenshot-overview.png)
+
+**High Priority & Other Roles** — top-scoring roles as cards, the rest in a ranked table:
+
+![High Priority cards and Other Roles table](_sample_data/screenshot-high-priority.png)
+
+**Already Applied & Excluded** — tracked outcomes, with NOGO/Closed decluttering checkboxes:
+
+![Already Applied and Excluded sections with filter checkboxes](_sample_data/screenshot-excluded.png)
 
 ---
 
@@ -13,6 +27,12 @@ Claude Desktop (Cowork mode) runs the workflow daily. It reads your Gmail, visit
 Ideally most people would love to search LinkedIn directly, however due to a lack of Open Interface, this is proving difficult. The workaround is to use LinkedIn job alerts. Having created several of these alerts set to daily frequency, I found that many roles appeared repeatedly across multiple alerts, some I had already applied to, and others were no longer accepting applications — resulting in a lot of time wasted checking the same jobs over and over again. This is now a thing of the past.
 
 In order to overcome these challenges the automation looks at the LinkedIn Job alerts received in a set period (by default 1 day), creates a unique list of jobs (eliminating duplicates), scores the job against the CV profile, identifies those jobs already applied or rejected and displays relevant jobs in a prioritised list ready to apply.
+
+Duplicates are identified by **company + job title + location**, not just company + title: the same role reposted under a new LinkedIn job ID (with the same location) is recognised as a repost and only scored once, while the same job title posted by the same company for two different locations (e.g. London and Manchester) is correctly treated as two separate roles and scored independently.
+
+The report is organised into sections: 🎯 Open Interviews, 💔 Failed Interviews, 📌 Follow-up, ⭐ High Priority, 📋 Other Roles, 📂 Already Applied, and 🚫 Excluded. A role you've already applied to or heard back from moves out of High Priority/Other Roles into its own 📂 Already Applied section (sorted by score), so it doesn't clutter the roles you still need to act on, without losing visibility of it entirely. The one exception: a role you're actively following up on (`follow-up` status) that's also been applied to or rejected appears in **both** 📌 Follow-up and 📂 Already Applied — Follow-up is for tracking what you're chasing, Already Applied is for tracking outcomes, and a role can be both at once. If a follow-up role is later rejected and you don't reapply, it's automatically dropped from the Follow-up table (it's no longer "active").
+
+Every section can be expanded or collapsed by clicking its header, and each section's default state (open or collapsed) is configurable per section — see `report_section_defaults` in `config.json` below. The 🚫 Excluded section additionally has two checkboxes ("⛔ NOGO" / "🔒 Closed") to temporarily hide those rows for a cleaner view — this is just a decluttering aid for the current viewing session (unticking one doesn't persist while you keep clicking around the same open report, and never changes the header counters). Whether each checkbox starts ticked or unticked on a freshly generated report is configurable via `excluded_filter_defaults` in `config.json` (both default to ticked).
 
 In addition to highlighting job opportunities, the automation is two-way and allows you to provide contextual information such as:
 
@@ -33,14 +53,16 @@ The Managing job feedback section shows examples of instructions. These will upd
 | `prompts/scoring_rubric.txt` | Weighted scoring criteria (0–100). Defines what makes a role a strong match (seniority, function, industry, location, company quality). |
 | `prompts/job_extraction_instructions.txt` | Tells Claude what fields to extract from each LinkedIn alert email (title, company, location, salary, apply link, etc.). |
 | `config.json` | Configuration file. Defines Gmail label names, lookback periods, and feature toggles. Edit this to adapt the project to your own Gmail setup. |
-| `inputs/job_feedback.json` | Your manual overrides. Add entries here to mark roles as NOGO (`skip`), `closed`, `interview`, or `follow-up`. Claude reads this on every run. Each entry is automatically enriched with: the LinkedIn job URL (`url`), hiring team details (`hiring_manager_name`, `hiring_manager_linkedin`), and 1st-degree LinkedIn contacts at the company (`L1_contacts_url`, `L1_contacts`). |
-| `cache/applications_cache.json` | Auto-generated cache of application and rejection history, built from your Gmail `Jobs` label. Created automatically on the first run. On subsequent runs only new emails (since the last run) are scanned, making status checks fast regardless of how long your job search has been running. Do not edit manually. |
+| `inputs/job_feedback.json` | Your manual overrides. Add entries here to mark roles as NOGO (`skip`), `closed`, `interview`, or `follow-up`. Claude reads this on every run. Entries are matched to report jobs by company + title (+ location when known — see `location` field, added to disambiguate the same company+title posted in different cities). Each entry is automatically enriched with: the LinkedIn job URL (`url`), hiring team details (`hiring_manager_name`, `hiring_manager_linkedin`), and 1st-degree LinkedIn contacts at the company (`L1_contacts_url`, `L1_contacts`). |
+| `cache/applications_cache.json` | Auto-generated cache of application and rejection history, built from your Gmail `Jobs` label. Created automatically on the first run. On subsequent runs only new emails (since the last run) are scanned, making status checks fast regardless of how long your job search has been running. Entries are matched by company + title (+ location when stated in the email, falling back to company + title otherwise). Do not edit manually. |
 | `cache/applications_archive.json` | Auto-generated archive of stale application entries (no activity for longer than `applications_archive_after_months` months). Archived entries are moved back to the live cache if a new rejection email arrives. Do not edit manually. |
-| `cache/jobs_seen_cache.json` | Auto-generated cache of every LinkedIn job ID scored to date. Prevents re-scoring the same job on subsequent runs when it reappears in alert emails. Stores score, reasons, and flags per job ID. Do not edit manually. |
-| `cache/jobs_page_cache.json` | Auto-generated cache of LinkedIn page visit results (open/closed, salary, applicant count) per job ID. Eliminates redundant Chrome visits: closed jobs are never re-checked; open jobs appearing in the current report are re-checked after `job_page_recheck_days` days (default: 7). Do not edit manually. |
+| `cache/jobs_seen_cache.json` | Auto-generated cache of every LinkedIn job ID scored to date. Prevents re-scoring the same job on subsequent runs when it reappears in alert emails, and catches reposts under a brand-new job ID by matching on company + title + location — the score is copied across, never recomputed, for a genuine repost. Stores score, reasons, flags, and location per job ID. Do not edit manually. |
+| `cache/jobs_page_cache.json` | Auto-generated cache of LinkedIn page visit results (open/closed, salary, applicant count) per job ID. Eliminates redundant Chrome visits: closed jobs are never re-checked; open jobs appearing in the current report are re-checked after `job_page_recheck_days` days (default: 7). Kept per job ID intentionally (not deduped by role) since open/closed status and salary are specific to each individual posting. Do not edit manually. |
 | `css/report-style-template.css` | The CSS template used when generating HTML reports. Claude reads this on every run and applies its styles to the output. Do not edit unless you want to change the visual design of all future reports. |
-| `reports/daily-job-report-YYYY-MM-DD.html` | The output — a dark-blue HTML dashboard with scored, ranked jobs. Open in any browser. |
+| `reports/daily-job-report-YYYY-MM-DD.html` | The output — a dark-blue HTML dashboard with scored, ranked jobs, split into collapsible sections (Open Interviews, Failed Interviews, Follow-up, High Priority, Other Roles, Already Applied, Excluded — see "How it works" above). Open in any browser. The footer shows the run's start/finish time and duration. |
+| `logs/run_log.json` | Auto-generated history of run start/finish timestamps and duration, one record appended per run. Informational only — never read back as an input to scoring or the report. Do not edit manually. |
 | `skills/` | Master skill instructions. Claude reads these directly on every run — they are the authoritative source. Contains `check-job-status` (verifies applied/rejected/NOGO status for every job) and `read-all-alert-emails` (ensures all alert emails, including confirmation emails, are fully processed). |
+| [`_sample_data/daily-job-report-2026-07-08-anonymised.html`](_sample_data/daily-job-report-2026-07-08-anonymised.html) | An anonymised example of a generated report, so you can see the dashboard's layout and sections before running your own. |
 
 **⚠️ DO NOT FORGET**
 
@@ -94,7 +116,21 @@ Edit `config.json` to match your Gmail label names:
   "alerts_lookback_days": 2,
   "application_lookback_days": 120,
   "use_cv_for_scoring": false,
-  "job_page_recheck_days": 7
+  "job_page_recheck_days": 7,
+  "applications_archive_after_months": 4,
+  "report_section_defaults": {
+    "open_interviews": "open",
+    "follow_up": "open",
+    "failed_interviews": "collapsed",
+    "high_priority": "open",
+    "other_roles": "open",
+    "already_applied": "open",
+    "excluded": "open"
+  },
+  "excluded_filter_defaults": {
+    "nogo": true,
+    "closed": true
+  }
 }
 ```
 
@@ -104,6 +140,9 @@ Edit `config.json` to match your Gmail label names:
 - **`application_lookback_days`** — how many days back Claude searches for past applications (default: 120)
 - **`use_cv_for_scoring`** — if `true`, Claude includes your CV when scoring each role; if `false` (default), scoring uses the rubric only. The CV is always available for cover letters and outreach regardless of this setting.
 - **`job_page_recheck_days`** — how many days before re-visiting an open job's LinkedIn page to refresh salary, applicant count, and open/closed status (default: 7). Only jobs appearing in the current report are re-checked; jobs that scored too low to appear are ignored.
+- **`applications_archive_after_months`** — how many months of inactivity before an application/rejection entry is moved from `cache/applications_cache.json` to `cache/applications_archive.json` (default: 4). Archiving runs once per calendar month and keeps the live cache lean without losing history — archived entries still count toward the report's header totals and are restored automatically if a rejection email arrives for them later.
+- **`report_section_defaults`** — controls whether each report section starts expanded (`"open"`) or collapsed (`"collapsed"`) when the HTML report is opened. Every section is independently configurable (`open_interviews`, `follow_up`, `failed_interviews`, `high_priority`, `other_roles`, `already_applied`, `excluded`); only `failed_interviews` defaults to `"collapsed"` out of the box. To change a section's default, just tell Claude in chat (e.g. *"collapse Other Roles by default from now on"*) — it will update this block for you. If this key is missing entirely (e.g. an older `config.json`), Claude falls back to the same defaults shown above.
+- **`excluded_filter_defaults`** — controls whether the 🚫 Excluded section's "⛔ NOGO" and "🔒 Closed" checkboxes start ticked (`true`) or unticked (`false`) each time a fresh report is generated. Both default to `true`. To change one, tell Claude in chat (e.g. *"default the NOGO checkbox to unticked from now on"*). If this key is missing, Claude falls back to both `true`.
 
 If you use different label names in Gmail, update these values here. Claude reads this file on every run and uses these values throughout.
 
@@ -152,13 +191,16 @@ You don't edit `inputs/job_feedback.json` directly — just tell Claude in plain
 - `"Head of Partnerships @ Acme: interview"` → moves to Open Interviews section
 - `"Head of Partnerships @ Acme: failed interview"` → removes from interview list
 
+If the same company posts the same job title in more than one location, mention the location in your command (e.g. `"Head of Partnerships @ Acme (Manchester): NOGO"`) so Claude flags only that specific posting and not an identically-titled role at a different location.
+
 Supported statuses Claude understands:
 
-- ⛔ **NOGO** — role stays visible in the report but is not actionable
+- ⛔ **NOGO** — role stays visible in the Excluded section but is not actionable
 - 🔒 **Closed** — moved to the Excluded section
-- 📌 **Follow-up** — tracked in the Follow-up table with application date
+- 📌 **Follow-up** — tracked in the Follow-up table with application date; if it's also been applied to or rejected, it additionally appears in Already Applied (see "How it works" above); if later rejected with no reapplication, it's automatically removed from Follow-up
 - 🎯 **Interview** — shown at the top of the report in Open Interviews
 - 💔 **Failed Interview** — shown in the collapsible Failed Interviews section, sorted most recent first
+- 🟠 **Applied** / 🔴 **Rejected** (no override) — moved out of High Priority/Other Roles into the 📂 Already Applied section, regardless of score
 
 ### Automatic enrichment
 
@@ -193,6 +235,8 @@ The Follow-up table in the report shows 6 columns:
 
 **Wrong label name** — The Gmail label names in `config.json` must exactly match what you created in Gmail (case-sensitive). If Claude finds no emails, open `config.json` and verify `gmail_job_alerts_label` and `gmail_job_applications_label` match your Gmail labels precisely.
 
+**Same job title appears twice in the report** — This is expected if the same company has posted that title for two different locations (e.g. London and Manchester) — they're scored and shown as separate roles. If they're genuinely the same posting appearing twice, check that their location text matches exactly (or normalises to the same place); if not, this is a role that needs a NOGO/feedback entry scoped to the correct location — see "Managing job feedback" above.
+
 ---
 
 ## ⚠️ Important — Re-sharing this project
@@ -203,4 +247,5 @@ If you pass this project on to someone else, remove all personal data before dis
 - Empty `inputs/job_feedback.json` (replace contents with `[]`)
 - Delete all files in the `reports/` folder
 - Delete all files in the `cache/` folder
+- Delete `logs/run_log.json` (or empty it to `[]`) — it's just run-history timestamps, but it's specific to your usage
 - Keep the `skills/`, `css/`, `inputs/`, and `prompts/` folders — they contain no personal data and must be included for the project to work (re-blank `prompts/CV_master.txt` before sharing)
