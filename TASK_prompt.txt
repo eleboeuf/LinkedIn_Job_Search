@@ -1,14 +1,222 @@
+PROGRESS TRACKING — MANDATORY:
+Before doing any work, create a visible, granular task list (e.g. via TaskCreate/TaskUpdate)
+covering at least these steps, so progress can be tracked in real time instead of appearing
+as one long silent operation:
+  1. Read config/rubric/cache/feedback files
+  2. Scan LinkedIn Alerts emails (last N days) and read every thread
+  3. Extract & dedupe jobs; score newly-seen jobs
+  4. Update applications cache (delta scan of Jobs label)
+  5. Apply inputs/job_feedback.json overrides (NOGO/closed/interview/follow-up/failed_interview)
+  6. Visit LinkedIn job pages that need checking (open/closed, salary, applicants)
+  7. Build and save the HTML report
+  8. Verify counts/segmentation before finishing
+Mark each task in_progress when starting it and completed when done. Do NOT delegate the
+entire run to a single opaque sub-agent call with no intermediate status — if sub-agents are
+used (e.g. for the LinkedIn page-visit batch in step 6), keep the parent-level task list
+updated as each sub-agent's portion completes so the run's progress stays visible throughout,
+especially since the page-visit step is typically the slowest part of the run.
+
+RUN TIMING — MANDATORY (added 8 July 2026, per user request): the parent/orchestrating
+context (not a sub-agent) must record wall-clock start time immediately before dispatching
+the first step (before step 1 begins, i.e. before any file reads) and wall-clock end time
+once step 9 (report saved) and the final reconciliation check are both complete — even
+though the run is split across multiple sub-agent calls per the SPLIT SUB-AGENT CALLS rule
+below, start/end must be timestamped at the parent level so the duration covers the whole
+run, not just one sub-agent's portion. Compute the duration (e.g. "7m 46s").
+
+Display the timing in TWO places:
+1. HTML report footer — using the existing `.note` CSS class, at the very bottom of the
+   report body, e.g.:
+     <div class="note">Run started: 08:30:12 UTC • Run finished: 08:37:58 UTC • Duration: 7m 46s</div>
+2. logs/run_log.json — append one record per run (create the `logs/` folder and the file
+   as an empty array `[]` if either doesn't exist yet) with this structure:
+     {
+       "date": "YYYY-MM-DD",
+       "start_time": "<ISO 8601 UTC timestamp>",
+       "end_time": "<ISO 8601 UTC timestamp>",
+       "duration": "7m 46s"
+     }
+   Follow the same INCREMENTAL CACHE WRITES discipline used for the other project JSON
+   files: back up the current file to logs/run_log.json.bak before overwriting, write the
+   updated array (existing records + the new one appended, never truncated or rewritten),
+   then immediately re-read and validate it parses as valid JSON before finishing the run.
+
+This is informational only — it must never affect scoring, segmentation, or any header
+counter in the report, and logs/run_log.json is never read back as an input to scoring or
+segmentation logic; it exists purely as a run-history record for the user.
+
+SPLIT SUB-AGENT CALLS — DO NOT BUNDLE STEPS 1-3 WITH STEPS 4-8:
+Steps 1-3 (read config/rubric/caches, scan alert emails, extract/dedupe/score) must run as
+their own separate, narrower sub-agent call (or be done directly in the main thread) and
+return a result BEFORE starting steps 4-8. This keeps step 1-2 fast and gives a visible
+checkpoint (new job count, which threads were read) early in the run, instead of waiting on
+one giant call that silently also does the applications-cache delta scan, page visits, report
+build, and reconciliation. Only bundle steps 4-8 together into a second sub-agent call (or
+further split step 6's page-visit batch into its own call, per the guidance above) once step
+1-3's results are back. Do not fold the email-scanning step into a large all-in-one run again.
+
+MASTER JOB LIST — BUILD ONCE, REUSE FOR EVERY CHECK (added 7 July 2026, after a run built
+the same company+title (now company+title+location, see the CANONICAL RULE — UNIQUE ROLE
+IDENTIFIER section below) enumeration three separate times — once for status-matching,
+again for the NOGO hard gate, again for final reconciliation — instead of building it once
+and running three checks against it):
+
+Build ONE list of every candidate job (company, title, job_id) as soon as scoring and the
+LinkedIn page visits (step 8b) are complete — this is the point where company, title, score,
+red/green flags, and open/closed+salary+applicants are all known. Enrich this SAME list
+in place as later steps run:
+  - the check-job-status matching pass (Gmail "Jobs" label + inputs/job_feedback.json) adds
+    a resolved status (Applied/Rejected/NOGO/Closed/none) to each entry;
+  - the NOGO/closed hard gate (check 1 below) reads section-eligibility off this list;
+  - the final reconciliation pass (check 3 below) re-reads this same list to confirm
+    placement.
+Do NOT re-derive the company+title+location enumeration from the cache files again at each of these
+points — that adds no safety, since the underlying data hasn't changed within a single run,
+and just repeats the same scan three times. The three CHECKS below must still each run
+independently (that redundancy is intentional and stays) — only the list-building itself
+should happen once. The one exception: if reconciliation finds and fixes a mismatch (e.g.
+moves a job from Other Roles to Excluded), update that entry in place on the same list —
+don't rebuild the whole list from scratch to pick up one correction. The header-counter
+recount in check 3c below reads a different data source (cache/applications_cache.json, not
+this job list) and remains its own independent computation regardless.
+
+MANDATORY VERIFICATION — NOGO/CLOSED GATE AND FINAL RECONCILIATION:
+This section exists because a job (Pigment — Global Alliance Director, GSIs EMEA) was once
+shown in High Priority with no status badge despite an explicit "skip" override in
+inputs/job_feedback.json (a second incident on 8 July 2026 also found 15 jobs rendered as
+both a High Priority card and an Other Roles row — see check 3d below, added after that
+incident). Three checks are now required, not optional — run all three against
+the ONE master job list built above, not three freshly-rebuilt lists:
+
+1. NOGO/CLOSED HARD GATE — before writing High Priority, Other Roles, or Excluded sections,
+   cross-check EVERY entry on the master job list against inputs/job_feedback.json. Any match
+   with status_override "skip" or "closed" must NEVER appear in High Priority OR Other Roles,
+   regardless of score or partnership-function match. ⛔ NOGO ("skip") always belongs in
+   Excluded, no exceptions. 🔒 Closed is DIFFERENT (updated 8 July 2026, per user request —
+   APPLIED VS CLOSED PRECEDENCE): if the job is ALSO 🟠 Applied or 🔴 Rejected (per STEP 7d),
+   it belongs in 📂 Already Applied, NOT Excluded — you already applied before it closed, so
+   the application is what matters, not the fact it's no longer accepting new applicants. Only
+   a Closed job with NO Applied/Rejected status belongs in Excluded. Do this as an explicit
+   checklist pass over the full master list, not opportunistically while writing cards.
+
+2. BACKFILL STRUCTURED DATES FROM FEEDBACK COMMENTS — if a job_feedback.json comment states
+   an explicit applied/rejected date (e.g. "Rejected 27/05/2026") but the corresponding
+   cache/applications_cache.json event still has rejected_date (or applied_date) as null,
+   write that date into the cache event immediately. Do not leave it as prose-only in the
+   comment field — the header counters (Applications/Rejections/Pending) are computed from
+   the structured cache data and will silently undercount if the date only lives in a comment.
+
+3. FINAL RECONCILIATION PASS — after the report is built and before saving, verify against
+   the SAME master job list (not a freshly rebuilt one):
+   a. Every job_feedback.json entry with status_override "skip" appears in Excluded ONLY, and
+      every entry with status_override "closed" appears in Excluded UNLESS it is also
+      Applied/Rejected, in which case it appears in 📂 Already Applied ONLY (see APPLIED VS
+      CLOSED PRECEDENCE above) — confirm none of them appear in High Priority OR Other Roles
+      either way.
+   b. The "High Priority" header counter equals the actual number of hp-cards rendered
+      in the High Priority section (count them, don't estimate).
+   c. The "Rejections" and "Applications" header counters match a fresh count over
+      cache/applications_cache.json (including any dates backfilled per step 2 above) — this
+      is a separate data source from the master job list and is always freshly computed here.
+   d. NO CROSS-SECTION DUPLICATES (added 8 July 2026, after 15 jobs were rendered as both
+      a High Priority card and an Other Roles row with identical scores in the same report):
+      for every job on the master list, confirm its normalised company+title+location
+      (per the CANONICAL RULE — UNIQUE ROLE IDENTIFIER above) appears in EXACTLY ONE of
+      High Priority / Other Roles / Already Applied / Excluded / Open Interviews — never
+      two (Already Applied added 8 July 2026, per the b2 ALREADY APPLIED rule in step 9).
+      Do this as an explicit pass over the master list (or equivalently, build a set of
+      every company+title+location rendered in each section and confirm the five sets are
+      pairwise disjoint) — do not eyeball it. This check is independent of and in addition
+      to check (a) above: (a) catches NOGO/closed jobs leaking into the wrong section; (d)
+      catches ANY job (NOGO or not) being rendered into more than one section — this
+      includes a High-Priority-eligible job also being left in Other Roles (see the NO
+      OVERLAP rule in step 9b above), an "interview"-status job leaking into Other Roles
+      or Excluded under a DIFFERENT job ID for the same normalised company+title+location
+      (found the same day: Aveni and Disseqt AI, both already shown in 🎯 Open Interviews,
+      also appeared in Other Roles via a second job ID for the same role, same location),
+      and (going forward) an Applied/Rejected job being left in High Priority or Other
+      Roles instead of moving to Already Applied. Matching must be done by normalised
+      company+title+location, not job ID, precisely because these cases can show up under
+      a different job ID for the same role. A same company+title role posted in a
+      genuinely different location is NOT a duplicate — it is a separate entry and may
+      legitimately appear in its own section. Fix any real duplicate found by removing it
+      from every section except the one section rule 9(a)/(b)/(b2)/(c) says it belongs in,
+      and re-verify the affected header counters.
+   Do not consider the report finished until this reconciliation pass is done and any
+   mismatches are corrected.
+
+INCREMENTAL CACHE WRITES — MANDATORY (added 7 July 2026, after inputs/job_feedback.json was
+found truncated/corrupted mid-write from an earlier interrupted run — the corruption wasn't
+caught until deep into reconciliation and required a full manual reconstruction pass):
+
+This applies to every JSON file this project writes: cache/jobs_seen_cache.json,
+cache/jobs_page_cache.json, cache/applications_cache.json, cache/applications_archive.json,
+inputs/job_feedback.json, and logs/run_log.json.
+
+1. NEVER accumulate a run's changes to one of these files in memory and write it once at the
+   very end. Write after each logical batch instead:
+   - jobs_seen_cache.json → write after each batch of newly-scored jobs (e.g. after the
+     email-scan batch, and again after any "unscored" backlog batch), not only once at the
+     end of the run.
+   - jobs_page_cache.json → write after each page-visit batch/subagent returns, per the
+     "PARALLEL BATCHING" rule in step 8b (this is already batch-based — keep it that way,
+     don't defer the write until every batch across the whole run has returned).
+   - applications_cache.json → write once the delta scan completes (it's normally a small
+     number of emails, so one write is fine, but do not fold it into the same in-memory
+     buffer as the report-build step).
+   - inputs/job_feedback.json → write immediately after adding or editing ANY entry (new
+     NOGO/closed/interview/follow-up/failed_interview, a status change, a comment edit, a
+     backfilled date). Never batch multiple feedback edits into a single end-of-run write.
+   - applications_archive.json → write immediately after the monthly archiving pass, if run.
+   - logs/run_log.json → write once, at the very end of the run, after the report is saved and
+     reconciliation completes (this is the one file in this list that legitimately only needs
+     a single end-of-run write, since it's a single append operation, not multiple incremental
+     batches).
+
+2. VALIDATE IMMEDIATELY AFTER EVERY WRITE. Right after writing any of the files above,
+   re-read it and confirm it parses as valid JSON before moving on to the next step. If it
+   fails to parse, the write is corrupted — do not proceed to other steps. Retry the write
+   immediately from the in-memory data that was just about to be saved, then re-validate.
+   Do not let a corrupted write sit un-detected until final reconciliation.
+
+3. VALIDATE ON STARTUP, BEFORE ANY OTHER WORK. As part of the "BEFORE STARTING ANY TASK"
+   file-read step below, confirm every existing cache/inputs JSON file parses cleanly. If
+   any file fails to parse:
+   - Treat it as evidence of a prior interrupted run — do not silently continue with it.
+   - Attempt automatic recovery: restore from the matching backup file (see rule 4) if one
+     exists. If no backup exists, reconstruct the file from whatever valid JSON content can
+     still be salvaged from the file itself plus any information already available in
+     context, then deduplicate any entries that were repeated by the interrupted write.
+   - Note the recovery explicitly in the run's final summary (which file, and roughly how
+     it was reconstructed) so the user is aware it happened — do not fix it quietly.
+
+4. KEEP A ROLLING BACKUP BEFORE EACH WRITE. Before overwriting any of the five files above,
+   copy the current on-disk version to `<filename>.bak` in the same folder (e.g.
+   inputs/job_feedback.json.bak) first. This gives rule 3's recovery step a real last-known-
+   good file to restore from instead of reconstructing from scratch. Overwrite the .bak file
+   each time (it only needs to hold the immediately-prior version, not a full history).
+
 BEFORE STARTING ANY TASK — Read these files from this folder:
 - config.json  (always first)
 - prompts/job_extraction_instructions.txt
 - prompts/scoring_rubric.txt
 - skills/check-job-status/SKILL.md
 - skills/read-all-alert-emails/SKILL.md
-- cache/jobs_seen_cache.json  (if it exists — skip silently if not)
-- cache/jobs_page_cache.json  (if it exists — skip silently if not)
+- cache/jobs_seen_cache.json  (if it exists — skip silently if not; validate it parses per the
+  INCREMENTAL CACHE WRITES section above before trusting its contents)
+- cache/jobs_page_cache.json  (if it exists — skip silently if not; validate it parses per the
+  INCREMENTAL CACHE WRITES section above before trusting its contents)
+Also validate (parse-check) cache/applications_cache.json, cache/applications_archive.json,
+and inputs/job_feedback.json at this point, even though they are read later in the flow —
+catching corruption here, before any work starts, is the whole point of the rule above.
 Read prompts/CV_master.txt ONLY if use_cv_for_scoring is true in config.json.
 Do not proceed until all required files are loaded. The local skill files are the authoritative
-version — they override any cached version of these skills in AppData.
+version — they override any cached version of these skills in AppData. As of 7 July 2026 the
+skill files were slimmed to remove ~70% overlap with this file — they now hold only the
+protocol/procedure that ISN'T restated here (Gmail search mechanics, email-body parsing,
+title-matching nuance, ATS caution). Wherever a skill file says "canonical rule, see
+TASK_prompt.txt," the authoritative text is here, not duplicated in the skill — do not treat
+the shorter skill files as missing information, they're deliberately pointing back to this file.
 
 From config.json, extract:
 - gmail_job_alerts_label → use this as the Gmail label for LinkedIn job alert emails
@@ -20,6 +228,43 @@ From config.json, extract:
 - applications_archive_after_months → number of months of inactivity before a cache/applications_cache.json
   entry is moved to cache/applications_archive.json (default: 6)
 If config.json is missing or a value is absent, fall back to: “Linkedin Alerts”, “Jobs”, 2, 120, false, 7, 6.
+
+CANONICAL RULE — GMAIL LABEL SEARCH: DISPLAY NAME, NEVER INTERNAL ID. (Consolidated here on
+7 July 2026 — this exact rule used to be repeated near-verbatim in both
+skills/check-job-status/SKILL.md and skills/read-all-alert-emails/SKILL.md; both files now
+point back here instead of restating it.) Every Gmail search in this project — whether
+against gmail_job_alerts_label or gmail_job_applications_label — must use the label's
+human-readable DISPLAY NAME (e.g. `label:Linkedin-Alerts`, `label:Jobs`), never its internal
+ID (e.g. `label:Label_229824024361616313`). The `list_labels` tool returns both a `name`
+(display name) and an `id` (internal ID) — always use `name`. Using the internal ID does not
+raise an error, it silently returns zero results, which is what makes this mistake dangerous:
+a whole day's label-filtered search can come back empty with no visible failure. Replace
+spaces in the display name with hyphens in the query string (e.g. "Linkedin Alerts" →
+`Linkedin-Alerts`).
+
+CANONICAL RULE — UNIQUE ROLE IDENTIFIER: COMPANY + TITLE + LOCATION (added 8 July 2026,
+per user request). Everywhere else in this document that says "company+title" or "same
+company + same job title" as the key for deciding whether two job postings are the SAME
+role (repost/scoring dedup, report-level rendering dedup, section-exclusivity checks,
+reconciliation duplicate checks) — that key is COMPANY + TITLE + LOCATION, all three
+normalised, not company+title alone. Concretely:
+- Normalise company (strip trailing parenthetical annotation, lowercase, strip
+  punctuation/whitespace — as already specified under the MATCHING KEY BUG section below),
+  normalise title (lowercase, strip punctuation/whitespace), and normalise location the
+  same way (lowercase, strip punctuation/whitespace; treat obvious equivalents as the same
+  location, e.g. "London" = "London, UK" = "Greater London" = "London Area, United
+  Kingdom" — but do NOT treat genuinely different cities/areas as equivalent).
+- Two postings are the SAME role only if company, title, AND location all match after
+  normalisation. Example: the same company posting the same job title once for London and
+  once for Manchester is TWO separate roles — score each independently, and both may appear
+  in the report as distinct entries. If the location is the same (or normalises to the
+  same place), it is ONE role, and the existing repost/dedup/exclusivity rules apply as
+  before (merge-then-score, one card/row, one section only, etc.).
+- This is the ONE normalisation function used everywhere in this project that needs a
+  same-role check — do not maintain a second, slightly different company+title-only
+  normaliser anywhere (scoring dedup, report dedup, feedback matching, reconciliation).
+Wherever this document below still literally reads "company+title" in an explanatory
+sentence, read it as shorthand for this company+title+location key.
 
 Only read emails from the Gmail label defined in gmail_job_alerts_label. Ignore all other folders.
 
@@ -33,9 +278,44 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    b. Check cache/jobs_seen_cache.json: if the job ID already exists in seen_jobs →
       use the cached score, reasons, and flags — do NOT re-score.
       Update first_seen only if it is newer than the stored value (keep oldest).
-   c. If job ID is not in the cache → score it (step 3) and add to cache/jobs_seen_cache.json.
-   After processing all jobs, save cache/jobs_seen_cache.json with last_updated set to now.
-3. Score each unseen job using prompts/scoring_rubric.txt.
+   c. If job ID is not in the cache → before scoring it, run the COMPANY+TITLE+LOCATION
+      REPOST CHECK below. Only fall through to step 3 (scoring) if that check finds no match.
+   d. COMPANY+TITLE+LOCATION REPOST CHECK — SCORE ONCE, NEVER RESCORE A REPOST (added 7
+      July 2026, after two Hire Feed "Partnerships Manager" postings and two Guidewire
+      Software "Director of Alliances EMEA" postings — same company, same title, same
+      location, different job IDs — were each scored independently in the same run;
+      extended 8 July 2026 to require location as part of the match, not just company+title
+      — see the CANONICAL RULE — UNIQUE ROLE IDENTIFIER section above):
+      Same company + same job title + same location = one entry. Merge first, THEN score —
+      never the other way round. Concretely:
+        - Normalise the new job's company name (strip any trailing parenthetical annotation,
+          e.g. " (AI-Native MarTech client)", then lowercase/strip punctuation/whitespace),
+          its title (lowercase/strip punctuation/whitespace), AND its location (lowercase/
+          strip punctuation/whitespace, treating obvious equivalents like "London" and
+          "Greater London" as the same place). Use the exact same normalisation function
+          used for job_feedback.json and applications_cache.json matching (see the
+          check-job-status skill) — do not maintain a second, slightly different normaliser.
+        - Search ALL existing entries in cache/jobs_seen_cache.json for the same normalised
+          company+title+location triple (regardless of job ID — this is what catches
+          reposts). A same company+title posting in a DIFFERENT location is NOT a repost —
+          it is a separate role and must be scored independently (e.g. the same "Director
+          of Alliances" title posted for London and for Manchester are two distinct roles).
+        - If a match is found → this is a repost, not a new role. Do NOT run the scoring
+          rubric again. Copy that entry's score, reasons, red_flags, and green_flags verbatim,
+          and append one line to reasons: "Repost of job_id <original id> — score reused, not
+          re-evaluated." Add the new job_id to cache/jobs_seen_cache.json with this copied
+          data and first_seen set to today's date (the job ID is genuinely new so it's a new
+          first_seen, but the SCORE is reused, not recomputed).
+        - If no match is found → it is genuinely new (including a same company+title role in
+          a new location); proceed to step 3 and score it normally.
+      This rule governs SCORING only. cache/jobs_page_cache.json entries are never merged
+      across job IDs — each posting keeps its own open/closed/salary/applicant data, since a
+      repost can have a different open/closed status than the original (e.g. the original
+      listing closes while the repost stays open, or vice versa).
+   After processing all jobs, save cache/jobs_seen_cache.json with last_updated set to now
+   (per the INCREMENTAL CACHE WRITES rule above, write after each batch rather than only once
+   at the very end of the run).
+3. Score each unseen (and non-repost) job using prompts/scoring_rubric.txt.
    If use_cv_for_scoring is true → also reference prompts/CV_master.txt for fit assessment.
    If use_cv_for_scoring is false → use the rubric only; do NOT reference the CV.
 4. Produce a ranked shortlist from highest to lowest score.
@@ -55,13 +335,18 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
 7. APPLICATION CACHE — load cache/applications_cache.json (in this folder) to determine applied/rejected
    status. This replaces scanning all historical emails on every run.
 
-   STRUCTURE of cache/applications_cache.json:
+   STRUCTURE of cache/applications_cache.json (a "location" field was added 8 July 2026 —
+   see the CANONICAL RULE — UNIQUE ROLE IDENTIFIER section above; populate it when the
+   application/rejection email or the matching job posting states a location, leave it null
+   if genuinely unknown — do NOT backfill or guess it for pre-existing entries that predate
+   this field, they remain matchable on company+title alone per the fallback rule below):
    {
      "last_processed_at": "<ISO 8601 UTC timestamp>",
      "applications": [
        {
          "company": "Acme Corp",
          "title": "Head of Partnerships",
+         "location": "London or null",
          "events": [
            {
              "applied_date": "YYYY-MM-DD or null",
@@ -88,22 +373,30 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
       - Process each new email using the matching rules below.
       - Update last_processed_at to the current UTC timestamp and save the file.
 
-   MATCHING RULES — normalise company name and job title before matching
-   (lowercase, strip punctuation, trim whitespace):
+   MATCHING RULES — normalise company name, job title, AND location before matching
+   (lowercase, strip punctuation, trim whitespace — per the CANONICAL RULE — UNIQUE ROLE
+   IDENTIFIER section above). Location comes from the application/rejection email body or
+   the matching job posting when stated; if the email doesn't state a location, or the
+   existing entry predates the "location" field and has it null, fall back to matching on
+   company+title alone rather than treating the match as failed — location disambiguates
+   when available, it does not replace company+title matching when it isn't:
    - Application confirmation email:
-       • Find existing entry (company + title) where the most recent event has
-         rejected_date: null (a pending application).
+       • Find existing entry (company + title + location, or company + title if location
+         is unavailable on either side) where the most recent event has rejected_date: null
+         (a pending application).
        • If found → this is a re-application: append a NEW event to the events array
          (applied_date set, rejected_date: null). Store Gmail id in application_email_id.
-       • If not found → create a new entry with one event (applied_date set,
-         rejected_date: null). Store Gmail id in application_email_id.
+       • If not found → create a new entry (with location if known, else null) with one
+         event (applied_date set, rejected_date: null). Store Gmail id in
+         application_email_id.
    - Rejection email:
-       • Find existing entry (company + title) where the most recent event has
-         rejected_date: null.
+       • Find existing entry (company + title + location, or company + title if location
+         is unavailable) where the most recent event has rejected_date: null.
        • If found → set rejected_date on that event. Store Gmail id in rejection_email_id.
        • If not found in cache/applications_cache.json (application was missed, OR the entry has
          already been archived — see STEP 7c) → FALLBACK: search cache/applications_archive.json
-         for an entry (company + title) whose most recent event has rejected_date: null.
+         for an entry (company + title + location, or company + title if location is
+         unavailable) whose most recent event has rejected_date: null.
            - If found in the archive → move that entry BACK into cache/applications_cache.json,
              set rejected_date on its most recent event, and store the Gmail id in
              rejection_email_id. Decrement archived_count and archived_pending in
@@ -147,12 +440,30 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    above). cache/applications_cache.json's last_processed_at is unaffected by archiving.
 
    STEP 7d — USE THE CACHE IN THE REPORT:
-   For each job in today's report, look up company + title in cache/applications_cache.json only
+   For each job in today's report, look up company + title + location (falling back to
+   company + title if either side lacks a location) in cache/applications_cache.json only
    (archived entries are historical and won't correspond to jobs in a current report).
    Status is determined by the MOST RECENT event in the events array:
    - applied_date set, rejected_date null → 🟠 Applied <date>
    - rejected_date set → 🔴 Rejected <date>
    - No match → no status badge.
+
+   MATCHING KEY BUG (fix required) — a job was once missed (Grey Matter Recruitment,
+   "Partnership Director, Europe") because the report displayed an enriched company name
+   with a parenthetical annotation appended for readability (e.g. "Grey Matter Recruitment
+   (AI-Native MarTech client)"), and that SAME enriched string was then used as the lookup
+   key against applications_cache.json — which only stores the bare company name ("Grey
+   Matter Recruitment"). The match silently failed and the status badge was dropped.
+   To prevent recurrence: always normalise the company name for matching by stripping any
+   trailing parenthetical annotation — e.g. strip " (...)" — plus the standard lowercase/
+   punctuation/whitespace normalisation from the check-job-status skill, BEFORE doing the
+   cache lookup. The parenthetical annotation may still be shown in the card/table for
+   readability, but it must never be part of the matching key. The same normalisation
+   (lowercase/strip punctuation/whitespace, treating obvious equivalents like "London" and
+   "Greater London" as the same place) applies to the location component of the
+   company+title+location key introduced 8 July 2026 (see the CANONICAL RULE — UNIQUE ROLE
+   IDENTIFIER section above) — an enriched or differently-formatted location string must
+   never cause a false mismatch either.
 8. Load inputs/job_feedback.json (in this folder) for NOGO / skip / closed / interview overrides.
    - If inputs/job_feedback.json does not exist, create it as an empty array [] and continue.
    - Jobs with status_override “skip” → flag as ⛔ NOGO with the comment.
@@ -167,20 +478,42 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    - Job is already marked status_override “closed” in inputs/job_feedback.json → skip.
    - Job ID is in cache/jobs_page_cache.json with open: false → skip (closed is permanent;
      if the role reopens LinkedIn assigns a new job ID).
-   - Job ID is in cache/jobs_page_cache.json with open: true AND the job does NOT appear
-     in the current report (scored too low / excluded) AND checked_date is within
-     job_page_recheck_days → skip.
+   - Job ID is in cache/jobs_page_cache.json with open: true AND the job would land in
+     ⭐ High Priority or 📋 Other Roles in the current report, but checked_date is within
+     job_page_recheck_days → skip (not due for recheck yet).
+   - Job ID is in cache/jobs_page_cache.json with open: true AND the job would land in
+     🚫 Excluded in the current report (scored too low, ⛔ NOGO, or otherwise not High
+     Priority/Other Roles) → skip, REGARDLESS of checked_date. Excluded jobs are never
+     recheck candidates — only their first-time visit (when the job ID was new) matters.
 
    RE-CHECK (visit the page):
-   - Job ID is in cache/jobs_page_cache.json with open: true AND the job DOES appear
-     in the current report AND checked_date is older than job_page_recheck_days → visit.
-   - Job ID is NOT in cache/jobs_page_cache.json → visit (first time seen).
+   - Job ID is in cache/jobs_page_cache.json with open: true AND the job would land in
+     ⭐ High Priority or 📋 Other Roles in the current report AND checked_date is older
+     than job_page_recheck_days → visit.
+   - Job ID is NOT in cache/jobs_page_cache.json → visit (first time seen), regardless of
+     which section it will land in — every job still gets one initial visit to establish
+     open/closed status and salary.
 
    For every page visited, check two things:
    a. Is it still accepting applications? Look for “No longer accepting
       applications” or similar closed indicators. Any closed role → flag as
       🔒 Closed, move to Excluded section, add to inputs/job_feedback.json with
       status_override “closed”.
+      NOGO TAKES PRECEDENCE — NEVER OVERWRITE (added 7 July 2026): if the job
+      already has an existing inputs/job_feedback.json entry with status_override
+      “skip” (⛔ NOGO), do NOT change status_override to “closed” and do NOT
+      replace or lose the existing NOGO comment. The entry stays status_override
+      “skip” and continues to display ⛔ NOGO (not 🔒 Closed) — NOGO reflects the
+      user’s own judgement on the role and must never be silently overwritten by
+      an automated closed-detection. Instead, append the closed finding as extra
+      context to the END of the existing comment (e.g. "<original NOGO comment>
+      Also no longer accepting applications (confirmed DD/MM/YYYY)."), keeping
+      the original NOGO reasoning intact and visible. The job still moves to /
+      stays in Excluded either way, and cache/jobs_page_cache.json is still
+      updated with open: false as normal — this guard only concerns
+      inputs/job_feedback.json’s status_override and comment field, not the page
+      cache, which always records factual open/closed status regardless of any
+      override.
    b. Is a salary range published? Extract it and display in the report
       (in cards and as a Salary column in tables).
    c. How many applicants? Extract the applicant count if shown.
@@ -200,15 +533,120 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    Save cache/jobs_page_cache.json with last_updated set to now after all visits complete.
 
    ⚠️  ENFORCEMENT: Jobs that require a visit MUST all be visited — not 5, not 10,
-   ALL of them. Use a subagent (model: "haiku" — this step is mechanical extraction:
-   open/closed status, salary text, applicant count; use Sonnet if results look
-   unreliable) to batch-check all required LinkedIn URLs in one pass.
-   Do NOT proceed to step 9 until every required job has been visited and logged.
-   If a subagent times out, spawn another to finish.
+   ALL of them. This step is mechanical extraction (open/closed status, salary text,
+   applicant count) — perform it directly with Sonnet, no subagent delegation
+   (updated 8 July 2026, per user request: the whole task runs on Sonnet — do
+   not delegate this step to Haiku subagents).
+
+   PARALLEL BATCHING — if the full list of job IDs needing a visit is more than ~8:
+   split it into batches of roughly 5-8 URLs each, and launch multiple Sonnet
+   subagents CONCURRENTLY (as separate Agent calls within the same message, not
+   one after another) — each subagent handles one batch and returns its own
+   open/closed + salary + applicant results. Merge all batches' results into
+   cache/jobs_page_cache.json in a single write once every batch has returned.
+   If the list is ~8 URLs or fewer, skip the parallel split — one subagent
+   handling the whole list is simpler and the parallelization overhead isn't
+   worth it at that size.
+   Do NOT proceed to step 9 until every required job has been visited and logged
+   across all batches. If a subagent times out, spawn another to finish its batch only.
+
+   NO-FABRICATION GUARD — DISPATCH LEDGER REQUIRED (added 8 July 2026, after a run
+   split page visits into 7 batches, actually dispatched only 3 of them as Agent
+   calls, then wrote plausible-looking open/closed + salary + applicant data into
+   cache/jobs_page_cache.json for the remaining 4 batches' ~17 jobs anyway — no tool
+   call ever ran for those jobs. This wrongly showed EPAM Systems, Precisely, and
+   TrendAI as closed (all three were actually open and scored ≥75, so they were
+   wrongly dropped from ⭐ High Priority into 🚫 Excluded) and gave Experis UK a
+   wrong "closed" reason instead of "low score." The error was only caught because
+   the user happened to already know those specific postings were open — nothing in
+   the run itself flagged the gap):
+   a. Before dispatching any batch, write out the full list of job IDs needing a
+      visit and partition it into batches, e.g. as a scratch note or the task list —
+      this is the dispatch ledger.
+   b. A job ID may be written into cache/jobs_page_cache.json ONLY if its open/
+      closed/salary/applicants values came from an actual Chrome tool result
+      returned by a subagent (or performed directly) in THIS run, or were copied
+      unchanged from a pre-existing cache/jobs_page_cache.json entry that itself
+      already satisfied this rule on a prior run. Never write a value that was
+      inferred, estimated, extrapolated from a similar job, or filled in "to keep
+      things moving" while a batch call was skipped, still pending, or failed.
+   c. After each subagent/batch call returns, tick off against the dispatch ledger
+      exactly the job IDs present in that call's returned data — not the job IDs
+      the batch was assigned. A batch that was dispatched but errored, timed out,
+      or returned fewer lines than requested leaves its missing IDs unticked; retry
+      only those IDs (per the existing "spawn another to finish its batch only"
+      rule above) rather than backfilling them by hand.
+   d. Before moving to step 9, confirm every job ID on the dispatch ledger is
+      ticked. If any are not, either dispatch/retry the batch that covers them or
+      explicitly tell the user those jobs were not checked this run and are being
+      shown with a "not yet visited" status — do not silently fill the gap.
+   e. FINAL COUNT CHECK (companion to check 3 in the MANDATORY VERIFICATION section
+      below): the number of entries in cache/jobs_page_cache.json with
+      checked_date == today must equal the number of job IDs actually returned by
+      a real tool call this run (sum across all batches) — not the number of job
+      IDs that were merely assigned to a batch. If these two counts don't match,
+      the report is not ready to save; find and fix the gap first.
 9. Save the output file to the `reports/` subfolder as `reports/daily-job-report-YYYY-MM-DD.html` (using today's date).
    Output — a clean HTML dashboard with a DARK BLUE theme (navy background
    #0a1628, dark blue cards #112240, light text — never white/light backgrounds)
-   and four sections:
+   and the following sections, in order (🎯 Open Interviews, 💔 Failed Interviews, 📌 Follow-up,
+   ⭐ High Priority, 📋 Other Roles, 📂 Already Applied, 🚫 Excluded — see a0/a0b/a1/a/b/b2/c below):
+   ALL SECTIONS COLLAPSIBLE (added 8 July 2026, per user request): every section
+   listed above (🎯 Open Interviews, 💔 Failed Interviews, 📌 Follow-up, ⭐ High
+   Priority, 📋 Other Roles, 📂 Already Applied, 🚫 Excluded) must be wrapped in a
+   native HTML <details class="section-details">...<summary>...</summary>...</details>
+   element instead of a plain <div class="section-title">...</div> heading, so each
+   section can be independently expanded/collapsed by clicking its header.
+   OPEN/COLLAPSED DEFAULT PER SECTION IS CONFIG-DRIVEN (updated 8 July 2026, per
+   user request — this REPLACES the earlier hardcoded "all open except Failed
+   Interviews" rule; Failed Interviews is no longer a special case in this spec,
+   it is just another entry in the config): read config.json's
+   "report_section_defaults" object, which maps each section to "open" or
+   "collapsed":
+     {
+       "report_section_defaults": {
+         "open_interviews": "open",
+         "follow_up": "open",
+         "failed_interviews": "collapsed",
+         "high_priority": "open",
+         "other_roles": "open",
+         "already_applied": "open",
+         "excluded": "open"
+       }
+     }
+   For each section, if its value is "open" → include the `open` attribute on
+   that section's <details> tag; if "collapsed" → omit the `open` attribute
+   entirely (do not write `open="false"` — HTML boolean attributes are only
+   present or absent). If config.json does not yet have a
+   "report_section_defaults" key (e.g. an older config.json), fall back to the
+   values shown above (all open except failed_interviews collapsed) as the
+   built-in default, and do NOT fail the run — just proceed with those values
+   without editing config.json (that's the user's choice to add, not something
+   to silently write in). If the user asks in chat to change a section's
+   default (e.g. "collapse Other Roles by default from now on"), update the
+   corresponding key in config.json — this is the only way these defaults
+   persist across runs; there is no per-report memory otherwise.
+   Use this CSS (add to every report's embedded <style> block, alongside the
+   existing .failed-details rules which are unchanged):
+     .section-details { margin: 0; }
+     .section-details > summary { font-size: 1.3rem; color: #fff; margin: 30px 0 16px;
+       padding-bottom: 8px; border-bottom: 2px solid #1e3a5f; cursor: pointer;
+       list-style: none; display: flex; align-items: center; gap: 8px; }
+     .section-details > summary::-webkit-details-marker { display: none; }
+     .section-details > summary::after { content: ' ▶'; font-size: 0.85rem; color: #64ffda; }
+     .section-details[open] > summary::after { content: ' ▼'; }
+   The <summary> text is simply the section title (e.g. "🎯 Open Interviews",
+   "⭐ High Priority") for sections whose config default is "open" — for a
+   section configured "collapsed", append " (click to expand)" to its summary
+   text (matching Failed Interviews' existing hint, which is no longer
+   hardcoded to that one section — ANY section configured "collapsed" gets the
+   same hint, since a collapsed section benefits from the affordance regardless
+   of which one it is). Do not invent a different CSS class per section beyond
+   the one existing exception — 💔 Failed Interviews keeps its own distinct
+   class="failed-details" (red theme, see a0b below) for visual reasons
+   unrelated to the open/collapsed logic; every other section shares
+   .section-details, exactly like .data-table/.roles-table is shared across
+   tables.
    HEADER — At the very top of the report, always display:
    - Title: "LinkedIn Job Report"
    - Subtitle: "<Day DD Month YYYY> • Automated scan of Linkedin Alerts (last <alerts_lookback_days> days)"
@@ -228,9 +666,20 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
        4. INTERVIEWS — count of jobs with status_override "interview". Bright green colour (#22c55e).
        5. FAILED INTERVIEWS — count of jobs with status_override "failed_interview". Red colour (#f87171).
        6. JOBS FOUND — total number of jobs in the report (excluding already-closed)
-       7. HIGH PRIORITY — jobs scoring ≥ 75, not NOGO/closed
+       7. HIGH PRIORITY — jobs scoring ≥ 75, not NOGO/closed, not already shown as an
+          Open Interview (status_override "interview" jobs belong only in the 🎯 Open
+          Interviews section at the top, not duplicated into High Priority), and not
+          already 🟠 Applied/🔴 Rejected (those count only toward the 📂 Already
+          Applied section, per rule b2 — added 8 July 2026, no separate header
+          counter for Already Applied was requested, so its jobs simply don't
+          inflate the High Priority count)
        8. FOLLOW-UPS — count of jobs with status_override "follow-up"
-       9. CLOSED — count of jobs marked 🔒 Closed
+       9. CLOSED — count of jobs marked 🔒 Closed in the Status column/field
+          (i.e. rendered with the Closed badge in 🚫 Excluded). A job with
+          status_override "closed" that is ALSO Applied/Rejected shows an
+          Applied/Rejected badge instead, in 📂 Already Applied (see APPLIED VS
+          CLOSED PRECEDENCE) — it does NOT count toward this Closed total,
+          since it isn't displaying a 🔒 Closed badge anywhere in the report.
        CSS classes for coloured numbers: .num (mint), .num-red (red #f87171), .num-orange (orange #fb923c).
        Add these to the .stat-box CSS block at the top of every report.
    Counter cards use dark blue background (#112240), mint/teal accent colour (#64ffda),
@@ -243,22 +692,124 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
      Links: #64b5f6
      Salary: #fbbf24
    Do NOT deviate from this template unless the user explicitly requests a change.
+   STATUS COLUMN MUST NEVER WRAP TO TWO LINES (added 7 July 2026, per user request): the
+   Other Roles table must carry class="data-table roles-table" on its <table> tag, and the
+   Excluded table must carry class="data-table excluded-table" on its <table> tag (both keep
+   the shared "data-table" class for base styling). This lets the CSS target the Status
+   column's exact position in each table (6th column in Other Roles, which has a Salary
+   column; 5th column in Excluded, which does not) with white-space: nowrap, regardless of
+   the differing column counts between the two tables. The rules already live in
+   css/report-style-template.css (`.roles-table th:nth-child(6)/td:nth-child(6)` and
+   `.excluded-table th:nth-child(5)/td:nth-child(5)`) — copy that CSS into each report's
+   embedded <style> block verbatim, and apply the matching table classes when generating the
+   HTML rows. The 📂 Already Applied table (added 8 July 2026) has the SAME columns as Other
+   Roles (Score/Company/Title/Location/Salary/Status/Notes), so it must also carry
+   class="data-table roles-table" and inherits the same 6th-column no-wrap rule — do not
+   invent a separate CSS selector for it.
+   REPORT-LEVEL DEDUP BY COMPANY+TITLE+LOCATION — MANDATORY (companion to the
+   COMPANY+TITLE+LOCATION REPOST CHECK in the DEDUPLICATION step above): same company +
+   same job title + same location = one entry in the report, never one per job ID (per the
+   CANONICAL RULE — UNIQUE ROLE IDENTIFIER section above). If the repost check above found
+   that two or more job IDs share the same normalised company+title+location triple, render
+   exactly ONE card/row for that triple in whichever section it belongs to — do not show the
+   original and the repost as separate cards/rows just because they have different job IDs.
+   The same company+title posted in a DIFFERENT location is NOT deduped — render each
+   location as its own separate card/row (e.g. "Director of Alliances EMEA" at the same
+   company posted for both London and Manchester are two distinct entries, each scored and
+   displayed independently). Choose which job ID's data to
+   display using this priority: (1) prefer whichever posting is currently open per
+   cache/jobs_page_cache.json — if the original closed but the repost is open, show the
+   repost, and vice versa; (2) if more than one is still open, prefer the most recently
+   first_seen job ID; (3) if all are closed, show the most recently first_seen job ID and
+   mark it 🔒 Closed. The Apply link, salary, and applicant count shown must all come from
+   that one chosen job ID's page-cache entry — never mix fields from two different job IDs
+   on the same card/row. Do not silently drop the other job ID(s) without a trace; optionally
+   note them in the card/row's Notes as "Also reposted as job <id>" if there's room, but this
+   is informational only, not mandatory.
    a0. 🎯 Open Interviews cards: all jobs with status_override "interview" in
-       inputs/job_feedback.json. Show company name, job title, and comment. Display at
+       inputs/job_feedback.json. Show company name, job title, comment, and a
+       "View Job →" link to the LinkedIn posting (added 8 July 2026, per user
+       request that every job listed anywhere in the report link to its
+       LinkedIn job spec — this card type was the one exception, previously
+       rendering no link at all even when the entry's "url" field was
+       populated). Markup: <a class="btn" href="<url>" target="_blank">View Job →</a>
+       — same markup pattern as the hp-card button, but styled with its OWN
+       green button CSS (updated 8 July 2026, per user request: use a green
+       button here, not the blue/mint hp-card button, so it contrasts against
+       the interview-card's dark green background instead of blending in):
+         .interview-card .btn { display: inline-block; margin-top: 10px; padding: 8px 18px;
+           border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.85rem;
+           background: #22c55e; color: #052e16; border: 1px solid #16a34a; }
+         .interview-card .btn:hover { background: #4ade80; }
+       Only render the link at all if the entry's url field is non-empty; if
+       url is empty/blank, omit the link entirely rather than rendering a
+       broken/empty href — per rule 10b, a missing url means the LinkedIn
+       listing could not be found (0 results or removed, common for roles deep
+       in interview where the posting is often taken down), not that Claude
+       should guess or fabricate one. Display at
        the very top of the report, before High Priority. These are roles the
        user is actively interviewing for — they may or may not appear in today's
        alert emails. Cards must use a green background (#14532d), bright green
        border (#22c55e), and a green glow (box-shadow rgba(34,197,94,0.2)).
-   a0b. 💔 Failed Interviews — collapsible section, displayed just before the Follow-up table.
-       Use a native HTML <details>/<summary> element so it is collapsed by default.
-       Summary label: "💔 Failed Interviews (click to expand)"
-       When expanded, show a table with columns: Date, Title, Company, Comment.
+   a0b. 💔 Failed Interviews — displayed just before the Follow-up table. Keeps its
+       own distinct CSS class (class="failed-details" on the <details> tag, with
+       its red-themed styling below) rather than the shared .section-details
+       class — that part is unchanged and intentional (the red theme visually
+       matches its "failed" content, unlike the neutral blue theme of every
+       other section). What DOES change (updated 8 July 2026): its open/collapsed
+       DEFAULT is no longer hardcoded to "always collapsed" — it now comes from
+       config.json's report_section_defaults.failed_interviews key, exactly like
+       every other section's default comes from its own key in that same
+       object (see the OPEN-COLLAPSED DEFAULT PER SECTION rule above). It
+       currently defaults to "collapsed" (the pre-existing behaviour), but can
+       be changed to "open" the same way any other section's default can. The
+       summary text follows the same "(click to expand)" suffix rule as any
+       other section configured "collapsed" — "💔 Failed Interviews (click to
+       expand)" when collapsed, plain "💔 Failed Interviews" if ever configured
+       "open". When expanded, show a table with columns: Date, Title, Company, Comment.
        Sorted by date descending (most recent first).
        Source: all entries in inputs/job_feedback.json with status_override "failed_interview".
        Table styling: dark red background (#3b1a1a), dark red border (#7f1d1d),
        header background (#4a1f1f), company names in muted red (#f87171).
+       LINK THE TITLE WHEN A URL IS AVAILABLE (added 8 July 2026, per user
+       request that every job listed anywhere in the report link to its
+       LinkedIn job spec): if the entry's "url" field is populated, render the
+       Title cell as <a href="<url>" target="_blank"><title></a>; if url is
+       empty/blank, render plain text as before. Title links in this section
+       are styled RED (updated 8 July 2026, per user request), not the default
+       blue used elsewhere in the report — add this CSS alongside the existing
+       .failed-table rules: `.failed-table td a { color: #f87171; text-decoration:
+       underline; } .failed-table td a:hover { color: #fca5a5; }`. Many older failed_interview
+       entries predate the url field and were never backfilled — per rule 10b,
+       do NOT block report generation trying to search LinkedIn for every one
+       of these on every run (old/rejected postings are frequently taken down,
+       so most searches will legitimately return 0 results); only search for a
+       missing url on THIS entry when the user is actively adding/editing it,
+       consistent with rule 10b's existing "whenever adding or updating any
+       entry" trigger — do not proactively re-search historical entries that
+       aren't otherwise being touched.
    a1. 📌 Follow-up table: all jobs with status_override "follow-up" in
-       inputs/job_feedback.json. Display as a table with columns: Applied (date),
+       inputs/job_feedback.json — EXCLUDING any job whose current resolved
+       status (per STEP 7d / cache/applications_cache.json, or the comment
+       text if not yet in the cache) is 🔴 Rejected with NO subsequent
+       reapplication (added 8 July 2026, per user request: once a follow-up
+       you're tracking gets a final rejection and you haven't reapplied, it's
+       no longer an active follow-up and should stop cluttering this table).
+       Determine this from the most recent event: if the latest applied_date
+       is AFTER the latest rejected_date (i.e. a reapplication happened after
+       the rejection — see Cresta and OpenAI below for the pattern, both
+       marked "Reapplied DD/MM/YYYY" in their comment) → still ACTIVE, keep it
+       in Follow-up. If the latest rejected_date is the most recent event with
+       no later reapplication → REMOVE it from this table (it may still land
+       in 📂 Already Applied if it happens to be one of today's scored jobs,
+       per rule b2 — Already Applied is unaffected by this Follow-up-specific
+       filter). When removing such an entry, also update its
+       inputs/job_feedback.json record: change status_override away from
+       "follow-up" (to null, unless another override like "skip" now applies)
+       so it doesn't keep getting excluded-and-rechecked on every run — this
+       is a one-time cleanup at the moment the rejection is confirmed with no
+       reapplication, not a per-run computation once already actioned.
+       Display as a table with columns: Applied (date),
        Company, Job Title (linked to the LinkedIn job page from the url field —
        plain text if no url), Comment, Hiring Team (name linked to their
        LinkedIn profile from hiring_manager_name / hiring_manager_linkedin
@@ -279,12 +830,178 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
        shown in the Applied column. Only include additional context (e.g.
        "Reapplied 19/06", "Contacted CRO, no response"). Leave blank if
        there is nothing beyond the application date to say.
-   a. ⭐ High Priority cards: score ≥ 75, not NOGO/closed.
+   a. ⭐ High Priority cards: score ≥ 75, not NOGO/closed, not status_override
+      "interview", not status_override "follow-up" (updated 8 July 2026, per
+      user request — see FOLLOW-UP IS A SINGLE-SECTION OVERRIDE under b2 below:
+      a follow-up job appears ONLY in 📌 Follow-up, never here, regardless of
+      score or Applied/Rejected status), AND not already 🟠 Applied or 🔴
+      Rejected (see b2 ALREADY APPLIED below — added 8 July 2026, per user
+      request: a job that has been applied to or rejected moves out of High
+      Priority into its own section, regardless of score). Interview jobs are
+      shown only once, in 🎯 Open Interviews above — do not also duplicate them
+      into High Priority.
    b. 📋 Other Roles table: ALL partnership/channel/ecosystem/alliance/GTM roles
-      regardless of score, PLUS any other role scoring ≥ 50.
-   c. 🚫 Excluded table: 🔒 Closed roles (no longer accepting applications),
-      PLUS non-partnership roles (e.g. pre-sales, account executive, technical,
-      generic account manager) scoring < 50.
+      regardless of score, PLUS any other role scoring ≥ 50 — EXCLUDING any job
+      with status_override "skip" (⛔ NOGO), "interview", OR "follow-up" (updated
+      8 July 2026, per user request — see FOLLOW-UP IS A SINGLE-SECTION
+      OVERRIDE under b2 below: a follow-up job appears ONLY in 📌 Follow-up,
+      never here), AND EXCLUDING any job already 🟠 Applied or 🔴 Rejected (see
+      b2 ALREADY APPLIED below — added 8 July 2026). NOGO jobs never appear in Other Roles, regardless
+      of their partnership-function match or score, and status_override "interview"
+      jobs never appear in Other Roles either — they belong ONLY in 🎯 Open
+      Interviews (see the 8 July 2026 incident below, where Aveni/"Strategic
+      Partnerships Lead" and Disseqt AI/"Sales Director, AI" — both status_override
+      "interview" — leaked into Other Roles under a second, different job ID for the
+      same normalised company+title+location).
+      NO OVERLAP WITH HIGH PRIORITY, OPEN INTERVIEWS, OR ALREADY APPLIED —
+      MANDATORY (added 8 July 2026, after 15 jobs were found rendered as BOTH a High
+      Priority card AND an Other Roles row with identical scores, and again the same
+      day after two "interview"-status jobs were found duplicated into Other Roles
+      via a second job ID): Other Roles is everything ELSE — every job that already
+      qualifies for ⭐ High Priority per rule (a) above, OR that has status_override
+      "interview" and therefore already has a 🎯 Open Interviews card, OR that is
+      already 🟠 Applied/🔴 Rejected and therefore belongs in 📂 Already Applied
+      (rule b2 below), must be EXCLUDED from Other Roles. A job appears in exactly
+      one of ⭐ High Priority / 📋 Other Roles / 🚫 Excluded (these three are
+      mutually exclusive and exhaustive of the score-based sections), UNLESS
+      status_override "interview" or "follow-up" applies, in which case the job
+      appears ONLY in 🎯 Open Interviews or 📌 Follow-up respectively — and
+      NOWHERE else, including 📂 Already Applied (updated 8 July 2026, per user
+      request — see FOLLOW-UP IS A SINGLE-SECTION OVERRIDE under b2 below; this
+      REVERSES the brief "dual-listing exception" tried earlier the same day,
+      where a follow-up job that was also Applied/Rejected appeared in BOTH
+      📌 Follow-up AND 📂 Already Applied — that dual-listing is no longer
+      correct; follow-up is now a single-section override exactly like
+      interview). Concretely: build the Open
+      Interviews and High Priority lists first, then when building Other Roles,
+      skip any job whose company+title+location (normalised, per the CANONICAL
+      RULE — UNIQUE ROLE IDENTIFIER above) already appears in either of those, or
+      is Applied/Rejected — checking by company+title+location, not just job ID,
+      since the same role can be re-posted under a new job ID while an older job
+      ID for the same role (same location) already has the
+      "interview"/High-Priority/Already-Applied placement. A same company+title
+      posting in a genuinely DIFFERENT location is a different role and is NOT
+      excluded on this basis.
+   b2. 📂 Already Applied table (added 8 July 2026, per user request — positioned in the
+      report between 📋 Other Roles and 🚫 Excluded): ALL jobs whose resolved status
+      (per STEP 7d / the check-job-status skill) is 🟠 Applied or 🔴 Rejected,
+      REGARDLESS of score, EXCLUDING any job with status_override "skip" (⛔ NOGO),
+      "interview", or "follow-up" — these three overrides take precedence and
+      keep the job OUT of Already Applied entirely, staying only in its
+      existing dedicated section (⛔ stays in 🚫 Excluded per the NOGO/CLOSED
+      HARD GATE; "interview" stays in 🎯 Open Interviews; "follow-up" stays in
+      📌 Follow-up). status_override "closed" (🔒 Closed) does NOT exclude a job
+      from here (updated 8 July 2026, per user request — APPLIED VS CLOSED
+      PRECEDENCE): if a job you already applied to subsequently closes to new
+      applicants, your application still stands — it belongs in 📂 Already
+      Applied with its normal 🟠 Applied/🔴 Rejected Status badge (NOT a 🔒
+      Closed badge), with the closed-detection fact folded into the Notes
+      column instead (e.g. "No longer accepting applications (confirmed
+      DD/MM/YYYY)." — same phrasing already used elsewhere for closed roles,
+      just relocated from Status to Notes since Status here is reserved for
+      Applied/Rejected per the rule below).
+      FOLLOW-UP IS A SINGLE-SECTION OVERRIDE (updated 8 July 2026, per user
+      request — this REVERSES the "dual-listing exception" introduced earlier
+      the same day, where a follow-up job that was also Applied/Rejected
+      appeared in BOTH 📌 Follow-up AND 📂 Already Applied): status_override
+      "follow-up" now works exactly like status_override "interview" — the job
+      appears ONLY in its one dedicated section (📌 Follow-up), regardless of
+      score AND regardless of Applied/Rejected status. It must NOT also appear
+      in 📂 Already Applied, ⭐ High Priority, 📋 Other Roles, or 🚫 Excluded.
+      Concrete example: Fin ("Manager, Business Development Partnerships") is
+      Applied (Jul 3) and subsequently marked status_override "follow-up" —
+      per this rule it now shows ONLY in 📌 Follow-up, and must be removed from
+      📂 Already Applied where it briefly appeared under the old dual-listing
+      behaviour. This section exists so a role you've
+      already applied to or heard back from doesn't clutter High Priority or Other
+      Roles, without losing visibility of it entirely. Columns/layout: same as the
+      📋 Other Roles table (Score, Company, Title, Location, Salary, Status, Notes)
+      — use table class="data-table roles-table" so it inherits the same
+      Status-column no-wrap CSS rule. Status column shows "Applied <date>" or
+      "Rejected <date>" exactly as elsewhere (see the status-text rules below) —
+      this section is the reason those two statuses exist here at all, so every
+      row must have one or the other, never a blank Status cell. Sorted by
+      descending score, same as every other section.
+   c. 🚫 Excluded table: 🔒 Closed roles with NO Applied/Rejected status (updated
+      8 July 2026 — a Closed role that IS Applied/Rejected belongs in 📂 Already
+      Applied per rule b2 above, not here; see APPLIED VS CLOSED PRECEDENCE),
+      PLUS ⛔ NOGO roles (status_override "skip", regardless of score or
+      partnership-function match, and regardless of Applied/Rejected status —
+      NOGO is the one override nothing outranks), PLUS non-partnership roles
+      (e.g. pre-sales, account executive, technical, generic account manager)
+      scoring < 50 — EXCLUDING any job whose normalised company+title+location
+      already has status_override "interview" (that job belongs ONLY in 🎯 Open
+      Interviews, per the same rule and incident described under Other Roles above). A job that is
+      both low-scoring/non-partnership AND already Applied/Rejected, with no NOGO
+      override, belongs in 📂 Already Applied (rule b2), not here — Excluded is
+      reached only via the NOGO/low-score-non-partnership/closed-with-no-application
+      path. Precedence summary (updated 8 July 2026 — APPLIED VS CLOSED
+      PRECEDENCE): ⛔ NOGO always wins over everything, including Applied/Rejected
+      (unchanged from the existing NOGO-takes-precedence rule). 🔒 Closed no longer
+      wins over Applied/Rejected — a Closed job you already applied to moves to
+      Already Applied, not Excluded. Closed only keeps a job in Excluded when
+      there is no Applied/Rejected status at all.
+      EXCLUDED SECTION DECLUTTER CHECKBOXES (added 8 July 2026, per user request):
+      add two checkboxes just below the 🚫 Excluded summary and above its
+      table-wrap, labelled with the status symbols themselves — "⛔ NOGO" and
+      "🔒 Closed" — NOT the word "Show" (updated 8 July 2026, per user request:
+      the label IS the symbol/text used elsewhere for that status, matching the
+      Status column exactly, not a generic "Show X" phrasing). These are a pure
+      client-side, per-view decluttering aid ONLY — they must NEVER affect the
+      header stat-box counters (Closed count etc. always reflect true totals,
+      regardless of what's currently hidden) and they do NOT persist across
+      runs on their own. Rows in the Excluded table that carry NEITHER a ⛔ NOGO
+      NOR a 🔒 Closed status (i.e. the low-score/non-partnership-fit rows with a
+      "—" status) are ALWAYS visible — neither checkbox applies to them; do not
+      add a third checkbox for them.
+      TICKED/UNTICKED DEFAULT IS CONFIG-DRIVEN (updated 8 July 2026, per user
+      request — this REPLACES the earlier hardcoded "both checked by default"):
+      read config.json's "excluded_filter_defaults" object:
+        {
+          "excluded_filter_defaults": {
+            "nogo": true,
+            "closed": true
+          }
+        }
+      For each checkbox, if its value is true → include the `checked` attribute
+      on that <input>; if false → omit it entirely (do not write
+      `checked="false"` — like the `open` attribute on <details>, HTML boolean
+      attributes are only present or absent). If config.json lacks this key
+      (e.g. an older config.json), fall back to both `true` (the pre-existing
+      behaviour) without editing config.json. If the user asks in chat to
+      change one (e.g. "default the NOGO checkbox to unticked from now on"),
+      update the corresponding key in config.json — same mechanism as
+      report_section_defaults above, and the only way this persists across
+      runs (the checkbox state itself still does not persist within a single
+      already-open report across reloads — this only controls what state each
+      FRESH report is generated with).
+      Implementation: tag every <tr> in the excluded-table with a
+      data-excl-status attribute — "nogo" if its Status cell is ⛔ NOGO, "closed"
+      if 🔒 Closed, "other" otherwise (the "other" tag is present for consistency
+      but no control ever hides it). Markup for the two checkboxes (place inside
+      a <div class="excl-filters"> immediately after the Excluded <summary> and
+      before its <div class="table-wrap">), with `checked` included/omitted per
+      the config values above — example shown with both true:
+        <div class="excl-filters">
+          <label><input type="checkbox" class="excl-toggle" data-status="nogo" checked> ⛔ NOGO</label>
+          <label><input type="checkbox" class="excl-toggle" data-status="closed" checked> 🔒 Closed</label>
+        </div>
+      CSS (add to every report's embedded <style> block):
+        .excl-filters { display: flex; gap: 20px; margin: 0 0 12px; font-size: 0.85rem; color: #a8b2d1; }
+        .excl-filters label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+        .excl-filters input[type="checkbox"] { accent-color: #64ffda; cursor: pointer; }
+      JS (add once, just before </body>):
+        <script>
+        document.querySelectorAll('.excl-toggle').forEach(function(cb) {
+          cb.addEventListener('change', function() {
+            var status = cb.getAttribute('data-status');
+            var rows = document.querySelectorAll('tr[data-excl-status="' + status + '"]');
+            rows.forEach(function(row) {
+              row.style.display = cb.checked ? '' : 'none';
+            });
+          });
+        });
+        </script>
    - Each section sorted by descending score.
    - Status badges: 🟠 Applied, 🔴 Rejected, ⛔ NOGO, 🔒 Closed.
    - In tables AND cards, the Status field should show ONLY "Applied <date>"
@@ -293,9 +1010,35 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
      orange, rejected in red (use CSS classes, not inline styles).
      NOGO/closed rows are NOT greyed out (no reduced opacity/colour change) —
      the ⛔/🔒 icons are sufficient to convey status.
+   - NOGO/CLOSED BADGE PLACEMENT — MANDATORY: the ⛔ NOGO / 🔒 Closed indicator
+     must appear ONLY in the Status column (tables) or the Status field (cards)
+     — nowhere else in the row/card. Specifically:
+       a. Do NOT append a badge/span next to the company name (e.g. no
+          "Company <span class='nogo-badge'>⛔ NOGO</span>" in the
+          company-name cell).
+       b. Do NOT repeat the literal word "NOGO" or "Closed" as leading text
+          in the Notes/comment column (e.g. no "<em>NOGO</em> ..." or
+          "<em>NOGO — reason</em>" prefix).
+       c. The feedback comment's underlying REASON (the substantive text
+          after "NOGO — ", if any) may still appear in Notes for context —
+          just strip the leading "NOGO"/"NOGO — "/"Closed"/"Closed — " label
+          itself before writing it into Notes, since that label already
+          lives in the Status column.
+       d. If a feedback comment is ONLY the word "NOGO" with no additional
+          reason, leave the Notes cell to show just the score flags (no
+          empty "<em></em>" or redundant text).
    - For High Priority cards, colour the "View Job →" button to match status:
      applied → orange (btn-applied), rejected → red (btn-rejected).
      Use CSS classes, not inline styles.
+10c. LOCATION FIELD — inputs/job_feedback.json entries have an optional "location" field
+    (added 8 July 2026, per the CANONICAL RULE — UNIQUE ROLE IDENTIFIER section above),
+    used together with company+title to match a feedback entry to the correct report job
+    when the same company+title exists in more than one location (e.g. NOGO on "Director of
+    Alliances EMEA" in London should not also silently apply to the same title posted for
+    Manchester). Populate it from the job posting's location whenever known; leave it null
+    if genuinely unknown. Matching falls back to company+title alone when either side lacks
+    a location — do NOT backfill or guess location for pre-existing entries that predate this
+    field.
 10b. URL FIELD — inputs/job_feedback.json entries have a "url" field for the LinkedIn job page.
     MANDATORY: whenever adding or updating any entry in inputs/job_feedback.json (follow-up,
     interview, failed_interview, skip, closed, or any other status), populate the "url"

@@ -5,5 +5,18 @@
   "application_lookback_days": 120,
   "use_cv_for_scoring": false,
   "job_page_recheck_days": 7,
-  "applications_archive_after_months": 6
+  "applications_archive_after_months": 4,
+  "report_section_defaults": {
+    "open_interviews": "open",
+    "follow_up": "open",
+    "failed_interviews": "collapsed",
+    "high_priority": "open",
+    "other_roles": "open",
+    "already_applied": "open",
+    "excluded": "open"
+  },
+  "excluded_filter_defaults": {
+    "nogo": true,
+    "closed": true
+  }
 }
