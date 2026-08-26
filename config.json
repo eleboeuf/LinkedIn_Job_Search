@@ -1,11 +1,13 @@
 {
   "gmail_job_alerts_label": "Linkedin Alerts",
   "gmail_job_applications_label": "Jobs",
-  "alerts_lookback_days": 2,
+  "alerts_lookback_days": 7,
   "application_lookback_days": 120,
   "use_cv_for_scoring": false,
   "job_page_recheck_days": 7,
   "applications_archive_after_months": 4,
+  "other_roles_min_score": 35,
+  "title_exclusion_keywords": ["marketing", "account executive", "enablement", "pre-sales", "presales"],
   "report_section_defaults": {
     "open_interviews": "open",
     "follow_up": "open",
@@ -17,6 +19,12 @@
   },
   "excluded_filter_defaults": {
     "nogo": true,
-    "closed": true
+    "closed": true,
+    "low_score": true,
+    "title_keyword": true
+  },
+  "applied_filter_defaults": {
+    "applied": true,
+    "rejected": true
   }
 }

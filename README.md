@@ -12,7 +12,7 @@ Job hunting on LinkedIn is time-consuming. This project automates it: every morn
 
 ![High Priority cards and Other Roles table](_sample_data/screenshot-high-priority.png)
 
-**Already Applied & Excluded** — tracked outcomes, with NOGO/Closed decluttering checkboxes:
+**Already Applied & Excluded** — tracked outcomes, with NOGO/Closed/Low score decluttering checkboxes:
 
 ![Already Applied and Excluded sections with filter checkboxes](_sample_data/screenshot-excluded.png)
 
@@ -30,7 +30,7 @@ Duplicates are identified by **company + job title + location**, not just compan
 
 The report is organised into sections: 🎯 Open Interviews, 💔 Failed Interviews, 📌 Follow-up, ⭐ High Priority, 📋 Other Roles, 📂 Already Applied, and 🚫 Excluded. A role you've already applied to or heard back from moves out of High Priority/Other Roles into its own 📂 Already Applied section (sorted by score), so it doesn't clutter the roles you still need to act on, without losing visibility of it entirely. The one exception: a role you're actively following up on (`follow-up` status) that's also been applied to or rejected appears in **both** 📌 Follow-up and 📂 Already Applied — Follow-up is for tracking what you're chasing, Already Applied is for tracking outcomes, and a role can be both at once. If a follow-up role is later rejected and you don't reapply, it's automatically dropped from the Follow-up table (it's no longer "active").
 
-Every section can be expanded or collapsed by clicking its header, and each section's default state (open or collapsed) is configurable per section — see `report_section_defaults` in `config.json` below. The 🚫 Excluded section additionally has two checkboxes ("⛔ NOGO" / "🔒 Closed") to temporarily hide those rows for a cleaner view — this is just a decluttering aid for the current viewing session (unticking one doesn't persist while you keep clicking around the same open report, and never changes the header counters). Whether each checkbox starts ticked or unticked on a freshly generated report is configurable via `excluded_filter_defaults` in `config.json` (both default to ticked).
+Every section can be expanded or collapsed by clicking its header, and each section's default state (open or collapsed) is configurable per section — see `report_section_defaults` in `config.json` below. The 🚫 Excluded section additionally has four checkboxes ("⛔ NOGO" / "🔒 Closed" / "🔽 Low score" / "❌ Excluded") to temporarily hide those rows for a cleaner view — this is just a decluttering aid for the current viewing session (unticking one doesn't persist while you keep clicking around the same open report, and never changes the header counters). Whether each checkbox starts ticked or unticked on a freshly generated report is configurable via `excluded_filter_defaults` in `config.json` (all four default to ticked). Every row in Excluded carries exactly one status: NOGO wins if a manual override says so, otherwise Closed if the listing no longer accepts applications, otherwise Low score if it simply didn't clear the scoring bar (see `other_roles_min_score` below), otherwise Excluded if its title matched a keyword in `title_exclusion_keywords` before it was ever scored.
 
 In addition to highlighting job opportunities, the automation is two-way and allows you to provide contextual information such as:
 
@@ -116,6 +116,8 @@ Edit `config.json` to match your Gmail label names:
   "use_cv_for_scoring": false,
   "job_page_recheck_days": 7,
   "applications_archive_after_months": 4,
+  "other_roles_min_score": 35,
+  "title_exclusion_keywords": ["marketing", "account executive", "enablement"],
   "report_section_defaults": {
     "open_interviews": "open",
     "follow_up": "open",
@@ -127,7 +129,9 @@ Edit `config.json` to match your Gmail label names:
   },
   "excluded_filter_defaults": {
     "nogo": true,
-    "closed": true
+    "closed": true,
+    "low_score": true,
+    "title_keyword": true
   }
 }
 ```
@@ -139,8 +143,10 @@ Edit `config.json` to match your Gmail label names:
 - **`use_cv_for_scoring`** — if `true`, Claude includes your CV when scoring each role; if `false` (default), scoring uses the rubric only. The CV is always available for cover letters and outreach regardless of this setting.
 - **`job_page_recheck_days`** — how many days before re-visiting an open job's LinkedIn page to refresh salary, applicant count, and open/closed status (default: 7). Only jobs appearing in the current report are re-checked; jobs that scored too low to appear are ignored.
 - **`applications_archive_after_months`** — how many months of inactivity before an application/rejection entry is moved from `cache/applications_cache.json` to `cache/applications_archive.json` (default: 4). Archiving runs once per calendar month and keeps the live cache lean without losing history — archived entries still count toward the report's header totals and are restored automatically if a rejection email arrives for them later.
+- **`other_roles_min_score`** — minimum score (0–100) a role must reach to appear in 📋 Other Roles at all (default: 35). This is a hard floor: previously, any partnership/channel/ecosystem/alliance/GTM-function role appeared in Other Roles regardless of score, which let very low-scoring, loosely-matched roles clutter the section. Now a role must score at least this threshold to appear there — partnership-function roles still don't need to clear the general 50-point bar (that non-partnership threshold is unchanged), but nothing below `other_roles_min_score` appears in Other Roles under any circumstances; it goes to 🚫 Excluded instead. To change it, edit this value directly or tell Claude in chat.
+- **`title_exclusion_keywords`** — an array of case-insensitive substrings checked against every new job's title (default: `["marketing", "account executive", "enablement"]`). A match short-circuits the whole pipeline for that job: it is never scored, never has its LinkedIn page visited, and goes straight to 🚫 Excluded with a "❌ Excluded" status badge — unless a higher-priority status already applies (NOGO, Closed-with-an-application, Interview, Follow-up, or Applied/Rejected), in which case that badge is shown instead. This is a permanent, one-time gate per job ID — a job already scored before a keyword was added is not retroactively re-evaluated automatically. To change the keyword list, edit this value directly or tell Claude in chat.
 - **`report_section_defaults`** — controls whether each report section starts expanded (`"open"`) or collapsed (`"collapsed"`) when the HTML report is opened. Every section is independently configurable (`open_interviews`, `follow_up`, `failed_interviews`, `high_priority`, `other_roles`, `already_applied`, `excluded`); only `failed_interviews` defaults to `"collapsed"` out of the box. To change a section's default, just tell Claude in chat (e.g. *"collapse Other Roles by default from now on"*) — it will update this block for you. If this key is missing entirely (e.g. an older `config.json`), Claude falls back to the same defaults shown above.
-- **`excluded_filter_defaults`** — controls whether the 🚫 Excluded section's "⛔ NOGO" and "🔒 Closed" checkboxes start ticked (`true`) or unticked (`false`) each time a fresh report is generated. Both default to `true`. To change one, tell Claude in chat (e.g. *"default the NOGO checkbox to unticked from now on"*). If this key is missing, Claude falls back to both `true`.
+- **`excluded_filter_defaults`** — controls whether the 🚫 Excluded section's "⛔ NOGO", "🔒 Closed", and "🔽 Low score" checkboxes start ticked (`true`) or unticked (`false`) each time a fresh report is generated. All three default to `true`. To change one, tell Claude in chat (e.g. *"default the NOGO checkbox to unticked from now on"*). If this key or the `low_score` entry is missing (e.g. an older `config.json`), Claude falls back to `true` for whichever is absent.
 
 If you use different label names in Gmail, update these values here. Claude reads this file on every run and uses these values throughout.
 
@@ -196,7 +202,7 @@ Supported statuses Claude understands:
 - ⛔ **NOGO** — role stays visible in the Excluded section but is not actionable
 - 🔒 **Closed** — moved to the Excluded section
 - 📌 **Follow-up** — tracked in the Follow-up table with application date; if it's also been applied to or rejected, it additionally appears in Already Applied (see "How it works" above); if later rejected with no reapplication, it's automatically removed from Follow-up
-- 🎯 **Interview** — shown at the top of the report in Open Interviews
+- 🎯 **Interview** — shown at the top of the report in Open Interviews; if the entry has an `interview_round` value (e.g. "3rd round"), it's shown right-aligned on the same row as the company name, in yellow — no brackets/parentheses. If the field is blank or missing, no round indicator is shown
 - 💔 **Failed Interview** — shown in the collapsible Failed Interviews section, sorted most recent first
 - 🟠 **Applied** / 🔴 **Rejected** (no override) — moved out of High Priority/Other Roles into the 📂 Already Applied section, regardless of score
 

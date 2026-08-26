@@ -45,6 +45,29 @@ This is informational only — it must never affect scoring, segmentation, or an
 counter in the report, and logs/run_log.json is never read back as an input to scoring or
 segmentation logic; it exists purely as a run-history record for the user.
 
+PER-STEP TIMING — MANDATORY (added 20 July 2026, per user request): in addition to the
+overall run start/end above, the parent/orchestrating context must record a wall-clock
+timestamp at the boundary of each major step in the "BEFORE STARTING ANY TASK" +
+step-1-through-9 sequence below — i.e. immediately before dispatching/starting each of:
+(1) reading config/rubric/cache/feedback files, (2) scanning alert emails and
+extracting/deduping/scoring (steps 1-3), (3) applications-cache delta scan + feedback
+overrides (steps 4-5), (4) LinkedIn page visits (step 6/8b — record the wall-clock span of
+the whole batched phase, not each individual sub-agent, since batches run concurrently),
+(5) building the master job list + HTML report + reconciliation (steps 7-9) — and a final
+timestamp when the run completes. Compute each step's duration as the difference between
+consecutive timestamps. Where a step is delegated to one or more sub-agent calls, the
+step's duration is the parent-observed wall-clock span from dispatch to return (for
+concurrent batches, use the span from the first dispatch to the last return, not a sum of
+each sub-agent's self-reported duration) — this may run slightly longer than the max
+individual sub-agent duration_ms due to parent-side dispatch/collection overhead, which is
+expected and fine to include.
+
+At the end of the run, display a step-by-step timing summary in the chat response (not
+required in the HTML report itself, which keeps only the single overall start/finish/
+duration line per the existing RUN TIMING rule above) — a short table or list giving each
+step's label and duration, followed by the total run duration. This is informational only,
+same as the rule above: it must never affect scoring, segmentation, or header counters.
+
 SPLIT SUB-AGENT CALLS — DO NOT BUNDLE STEPS 1-3 WITH STEPS 4-8:
 Steps 1-3 (read config/rubric/caches, scan alert emails, extract/dedupe/score) must run as
 their own separate, narrower sub-agent call (or be done directly in the main thread) and
@@ -142,6 +165,36 @@ the ONE master job list built above, not three freshly-rebuilt lists:
       legitimately appear in its own section. Fix any real duplicate found by removing it
       from every section except the one section rule 9(a)/(b)/(b2)/(c) says it belongs in,
       and re-verify the affected header counters.
+   e. NO WITHIN-SECTION DUPLICATE ROWS — MANDATORY (added 16 July 2026, after 8 repost
+      groups — e.g. Jack & Jill "Head of Partnerships at Azoma" — were found rendered as
+      6 near-identical rows in the SAME section (Excluded), one per job_id, instead of
+      being collapsed into the single row required by the REPORT-LEVEL DEDUP BY
+      COMPANY+TITLE+LOCATION rule under step 9 above; a separate incident, from the same
+      root cause, also spanned Already Applied). Check (d) above only catches a
+      company+title+location appearing in more than one DIFFERENT section — it does not
+      catch multiple job_ids for the same company+title+location all landing in the SAME
+      section, which is a distinct failure mode (the repost-merge step was skipped
+      entirely at render time, not just misrouted). Do this as an explicit pass WITHIN
+      each of High Priority / Other Roles / Already Applied / Excluded individually:
+      build a set of normalised company+title+location for every row/card rendered in
+      that one section and confirm no key appears more than once. If a key repeats,
+      collapse to exactly one row using the job-ID-selection priority already defined
+      under the REPORT-LEVEL DEDUP rule (prefer open per cache/jobs_page_cache.json; if
+      several are open, prefer the most recently first_seen; if all are closed, prefer
+      the most recently first_seen and mark it Closed) — UNLESS cache/jobs_seen_cache.json
+      shows one entry explicitly reusing another's score via "Repost of job_id X - score
+      reused" while its own stored score doesn't actually match X's score (a signal the
+      repost-reuse step silently failed and the job was rescored independently in
+      violation of the SCORE ONCE, NEVER RESCORE A REPOST rule) — in that case prefer the
+      job_id holding the correct, reused score over the recency heuristic, and fix the
+      drifted score in cache/jobs_seen_cache.json to match (with the usual backup and
+      validate discipline). Also check inputs/job_feedback.json for duplicate entries
+      sharing the same normalised company+title(+location) — if more than one entry
+      matches the same role (this is what caused several of the incidents above: two
+      separate NOGO/closed entries for what should have been one role, added on
+      different dates), merge them into a single entry (keep the more complete or most
+      recent comment and url) rather than leaving both in the array, so future runs
+      don't re-derive the same duplicate-row bug from duplicate source data.
    Do not consider the report finished until this reconciliation pass is done and any
    mismatches are corrected.
 
@@ -227,7 +280,18 @@ From config.json, extract:
 - job_page_recheck_days → number of days before re-checking an open job's LinkedIn page (default: 7)
 - applications_archive_after_months → number of months of inactivity before a cache/applications_cache.json
   entry is moved to cache/applications_archive.json (default: 6)
-If config.json is missing or a value is absent, fall back to: “Linkedin Alerts”, “Jobs”, 2, 120, false, 7, 6.
+- other_roles_min_score → minimum score (0–100) a job must reach to appear anywhere in 📋 Other
+  Roles, added 16 July 2026 per user request after too many very-low-scoring roles (mostly
+  loosely partnership/channel/GTM-keyword-matched postings scoring in the 20s and 30s) were
+  cluttering that section under the old “partnership-function roles regardless of score” carve-
+  out. This is a hard floor — see the 📋 Other Roles / 🚫 Excluded rules in step 9 below for how
+  it interacts with the existing partnership-function and non-partnership ≥50 thresholds
+  (default: 35).
+- title_exclusion_keywords → array of case-insensitive substrings checked against each new
+  job's title, added 16 July 2026 per user request (default: [“marketing”, “account
+  executive”, “enablement”]). See TITLE KEYWORD EXCLUSION under DEDUPLICATION below — a
+  title match short-circuits scoring entirely, not just section placement.
+If config.json is missing or a value is absent, fall back to: “Linkedin Alerts”, “Jobs”, 2, 120, false, 7, 6, 35, [“marketing”, “account executive”, “enablement”].
 
 CANONICAL RULE — GMAIL LABEL SEARCH: DISPLAY NAME, NEVER INTERNAL ID. (Consolidated here on
 7 July 2026 — this exact rule used to be repeated near-verbatim in both
@@ -278,8 +342,32 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    b. Check cache/jobs_seen_cache.json: if the job ID already exists in seen_jobs →
       use the cached score, reasons, and flags — do NOT re-score.
       Update first_seen only if it is newer than the stored value (keep oldest).
-   c. If job ID is not in the cache → before scoring it, run the COMPANY+TITLE+LOCATION
-      REPOST CHECK below. Only fall through to step 3 (scoring) if that check finds no match.
+   c. If job ID is not in the cache → before running the repost check or scoring, run the
+      TITLE KEYWORD EXCLUSION check below. Only fall through to the COMPANY+TITLE+LOCATION
+      REPOST CHECK (and then step 3 scoring) if the title does NOT match any exclusion
+      keyword.
+   c2. TITLE KEYWORD EXCLUSION — SKIP SCORING ENTIRELY (added 16 July 2026, per user
+      request, after too many roles with titles like "Channel Marketing Manager" or
+      "Account Executive - Architecture" were being scored and then manually marked NOGO
+      one by one): read title_exclusion_keywords from config.json (default: ["marketing",
+      "account executive", "enablement"]). If the job's title, lowercased, contains ANY of
+      these keywords as a substring (case-insensitive, no word-boundary requirement — e.g.
+      "enablement" matches inside "Client Enablement" too) → do NOT run the repost check,
+      do NOT score against the rubric, and do NOT ever visit its LinkedIn page (see the
+      SKIP list in step 8b below). Add the job directly to cache/jobs_seen_cache.json with:
+        score: null, title_keyword_excluded: true, matched_keyword: "<the matched keyword>",
+        reasons: [], red_flags: [], green_flags: [], first_seen: today.
+      This is a hard, permanent gate — once a job ID is recorded this way it is never
+      rescored later even if title_exclusion_keywords changes (matches the existing
+      "score once, never rescore" philosophy used for reposts and cached jobs above). The
+      job still appears in 🚫 Excluded in the report with a "❌ Excluded" status badge — see
+      step 9c below — UNLESS a higher-precedence status already applies to it (NOGO,
+      Closed-with-no-application, Interview, Follow-up, or Applied/Rejected — see the
+      section-precedence order in step 9 below; a role you already applied to before this
+      rule existed still belongs in 📂 Already Applied, not silently dropped). This check
+      only applies to NEW job IDs (step c) — an already-cached job ID always reuses its
+      cached record verbatim per step b above, whether that record has a score or is
+      title_keyword_excluded.
    d. COMPANY+TITLE+LOCATION REPOST CHECK — SCORE ONCE, NEVER RESCORE A REPOST (added 7
       July 2026, after two Hire Feed "Partnerships Manager" postings and two Guidewire
       Software "Director of Alliances EMEA" postings — same company, same title, same
@@ -475,6 +563,10 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    For each job, apply the following rules in order:
 
    SKIP (no Chrome visit needed):
+   - Job has title_keyword_excluded: true in cache/jobs_seen_cache.json (added 16 July 2026,
+     per user request — see TITLE KEYWORD EXCLUSION under DEDUPLICATION above) → skip,
+     permanently, regardless of checked_date or whether it has ever been visited before.
+     These jobs are excluded on title alone and must never reach Chrome.
    - Job is already marked status_override “closed” in inputs/job_feedback.json → skip.
    - Job ID is in cache/jobs_page_cache.json with open: false → skip (closed is permanent;
      if the role reopens LinkedIn assigns a new job ID).
@@ -491,7 +583,9 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
      ⭐ High Priority or 📋 Other Roles in the current report AND checked_date is older
      than job_page_recheck_days → visit.
    - Job ID is NOT in cache/jobs_page_cache.json → visit (first time seen), regardless of
-     which section it will land in — every job still gets one initial visit to establish
+     which section it will land in, UNLESS it has title_keyword_excluded: true (see the SKIP
+     list above — those never get even a first visit) — every other job still gets one
+     initial visit to establish
      open/closed status and salary.
 
    For every page visited, check two things:
@@ -626,15 +720,11 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    default (e.g. "collapse Other Roles by default from now on"), update the
    corresponding key in config.json — this is the only way these defaults
    persist across runs; there is no per-report memory otherwise.
-   Use this CSS (add to every report's embedded <style> block, alongside the
-   existing .failed-details rules which are unchanged):
-     .section-details { margin: 0; }
-     .section-details > summary { font-size: 1.3rem; color: #fff; margin: 30px 0 16px;
-       padding-bottom: 8px; border-bottom: 2px solid #1e3a5f; cursor: pointer;
-       list-style: none; display: flex; align-items: center; gap: 8px; }
-     .section-details > summary::-webkit-details-marker { display: none; }
-     .section-details > summary::after { content: ' ▶'; font-size: 0.85rem; color: #64ffda; }
-     .section-details[open] > summary::after { content: ' ▼'; }
+   The CSS for this (`.section-details` and its summary/marker rules) lives in
+   css/report-style-template.css alongside the existing .failed-details rules —
+   copy it into every report's embedded <style> block verbatim, same as every
+   other rule under MANDATORY STYLE REFERENCE below. Do not re-derive or
+   hand-edit these rules per report.
    The <summary> text is simply the section title (e.g. "🎯 Open Interviews",
    "⭐ High Priority") for sections whose config default is "open" — for a
    section configured "collapsed", append " (click to expand)" to its summary
@@ -652,11 +742,20 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    - Subtitle: "<Day DD Month YYYY> • Automated scan of Linkedin Alerts (last <alerts_lookback_days> days)"
    - A row of summary counter cards in this exact order:
        1. APPLICATIONS — (count of entries in cache/applications_cache.json where at least one
-          event has application_email_id OR rejection_email_id set) + archived_count from
-          cache/applications_archive.json. Mint colour (#64ffda).
+          event has applied_date OR rejected_date set) + archived_count from
+          cache/applications_archive.json. Mint colour (#64ffda). CLARIFIED 16 July 2026, per
+          user request: count on the DATE field, not the email_id field — application_email_id
+          being null does not disqualify an event, since manually-reported applications/
+          rejections (told to Claude in chat, with no Gmail confirmation email — e.g. Optiml,
+          MBR Partner, and Nexthink's rejection) are just as real as email-confirmed ones and
+          must count toward these totals. The email_id fields remain useful for provenance and
+          duplicate-detection during the Gmail delta scan (STEP 7), but were never meant to
+          gate the header counters — this replaces the original (pre-16-July-2026) formula
+          which incorrectly required application_email_id/rejection_email_id specifically.
        2. REJECTIONS — (count of entries in cache/applications_cache.json where at least one
-          event has rejection_email_id set) + archived_rejected from
-          cache/applications_archive.json. Red colour (#f87171).
+          event has rejected_date set) + archived_rejected from
+          cache/applications_archive.json. Red colour (#f87171). Same 16 July 2026
+          clarification as APPLICATIONS above — count on rejected_date, not rejection_email_id.
        3. PENDING — APPLICATIONS minus REJECTIONS (applications with no rejection received).
           Orange colour (#fb923c). This is equivalent to (live pending entries) +
           archived_pending from cache/applications_archive.json.
@@ -736,11 +835,9 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
        — same markup pattern as the hp-card button, but styled with its OWN
        green button CSS (updated 8 July 2026, per user request: use a green
        button here, not the blue/mint hp-card button, so it contrasts against
-       the interview-card's dark green background instead of blending in):
-         .interview-card .btn { display: inline-block; margin-top: 10px; padding: 8px 18px;
-           border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.85rem;
-           background: #22c55e; color: #052e16; border: 1px solid #16a34a; }
-         .interview-card .btn:hover { background: #4ade80; }
+       the interview-card's dark green background instead of blending in) —
+       the `.interview-card .btn` rules live in css/report-style-template.css,
+       see MANDATORY STYLE REFERENCE below.
        Only render the link at all if the entry's url field is non-empty; if
        url is empty/blank, omit the link entirely rather than rendering a
        broken/empty href — per rule 10b, a missing url means the LinkedIn
@@ -751,6 +848,44 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
        user is actively interviewing for — they may or may not appear in today's
        alert emails. Cards must use a green background (#14532d), bright green
        border (#22c55e), and a green glow (box-shadow rgba(34,197,94,0.2)).
+       INTERVIEW ROUND INDICATOR — MANDATORY (revised again 2026-07-14, per
+       user request — removed brackets, moved from inline-after-company-name
+       to right-aligned on the same row, since round should be visually
+       distinct/scannable at a glance): every Open Interviews card must
+       display the entry's "interview_round" field from inputs/job_feedback.json
+       (e.g. "3rd round", "2nd round") on the same line as the company name,
+       right-aligned on that row — not in brackets/parentheses, not appended
+       directly after the company name text, and not as a separate block below
+       the title. Wrap the company name and the round indicator in a flex row
+       container so the company name sits on the left and the round sits on
+       the right of the same line, e.g.:
+       `<div class="card-header-row"><span class="company">Vistex</span><span class="round">3rd round</span></div>`
+       — display the field's value as-is, without surrounding brackets or
+       parentheses; do not reword or renumber it. The `.card-header-row`
+       container uses `display: flex; justify-content: space-between;
+       align-items: center;` so the two elements land at opposite ends of the
+       row. Style the round text using the `.interview-card .round` CSS
+       class — it lives in css/report-style-template.css, see MANDATORY STYLE
+       REFERENCE below; do not hand-roll the yellow colour inline. If
+       "interview_round" is blank or missing on an entry, omit the round span
+       entirely (still wrap the company name alone in `.card-header-row` for
+       markup consistency) — do not render an empty `<span
+       class="round"></span>`, and do not fabricate a round number that isn't
+       in the data.
+       SORT ORDER — MANDATORY (added 2026-07-14, per user request — this
+       REPLACES whatever implicit/unstated ordering existed before for this
+       section; previously Open Interviews cards had no explicit sort rule
+       stated, this is the first one): cards are sorted by interview round
+       DESCENDING. Parse the leading ordinal number out of the
+       "interview_round" string ("1st"→1, "2nd"→2, "3rd"→3, "4th"→4, etc.)
+       and sort numerically descending, so a "4th round" card appears before
+       a "3rd round" card, which appears before a "2nd round" card, which
+       appears before a "1st round" card. Cards with no interview_round value
+       (blank/missing) sort LAST, after every card that has a round number.
+       Ties — i.e. multiple cards sharing the same round number, and
+       separately, multiple cards with no round value — are broken using
+       descending score, the same tiebreaker used by every other section in
+       this report (see "Each section sorted by descending score" below).
    a0b. 💔 Failed Interviews — displayed just before the Follow-up table. Keeps its
        own distinct CSS class (class="failed-details" on the <details> tag, with
        its red-themed styling below) rather than the shared .section-details
@@ -777,9 +912,9 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
        Title cell as <a href="<url>" target="_blank"><title></a>; if url is
        empty/blank, render plain text as before. Title links in this section
        are styled RED (updated 8 July 2026, per user request), not the default
-       blue used elsewhere in the report — add this CSS alongside the existing
-       .failed-table rules: `.failed-table td a { color: #f87171; text-decoration:
-       underline; } .failed-table td a:hover { color: #fca5a5; }`. Many older failed_interview
+       blue used elsewhere in the report — the `.failed-table td a` rules live
+       in css/report-style-template.css alongside the existing .failed-table
+       rules, see MANDATORY STYLE REFERENCE below. Many older failed_interview
        entries predate the url field and were never backfilled — per rule 10b,
        do NOT block report generation trying to search LinkedIn for every one
        of these on every run (old/rejected postings are frequently taken down,
@@ -809,7 +944,10 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
        so it doesn't keep getting excluded-and-rechecked on every run — this
        is a one-time cleanup at the moment the rejection is confirmed with no
        reapplication, not a per-run computation once already actioned.
-       Display as a table with columns: Applied (date),
+       Display as a table with columns: Applied (date) — format DD-MM-YYYY,
+       zero-padded, hyphen-separated, e.g. "14-07-2026" (added 2026-07-14, per
+       user request — standardised to DD-MM-YYYY from the previous 'Mon D'/'Mon
+       YYYY' style, matching the Status-column date format above),
        Company, Job Title (linked to the LinkedIn job page from the url field —
        plain text if no url), Comment, Hiring Team (name linked to their
        LinkedIn profile from hiring_manager_name / hiring_manager_linkedin
@@ -840,8 +978,16 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
       Priority into its own section, regardless of score). Interview jobs are
       shown only once, in 🎯 Open Interviews above — do not also duplicate them
       into High Priority.
-   b. 📋 Other Roles table: ALL partnership/channel/ecosystem/alliance/GTM roles
-      regardless of score, PLUS any other role scoring ≥ 50 — EXCLUDING any job
+   b. 📋 Other Roles table: MINIMUM SCORE FLOOR — MANDATORY (added 16 July 2026, per user
+      request, after too many very-low-scoring roles cluttered this section under the old
+      "regardless of score" partnership carve-out below): a job may appear in Other Roles ONLY
+      if its score is ≥ other_roles_min_score (config.json, default 35) — this floor applies to
+      EVERY job considered for this section, including partnership/channel/ecosystem/
+      alliance/GTM-function roles that were previously exempt from any score check. A job
+      scoring below other_roles_min_score goes to 🚫 Excluded instead (see the Excluded rule
+      below), regardless of function match. Subject to that floor, Other Roles table: ALL
+      partnership/channel/ecosystem/alliance/GTM roles scoring ≥ other_roles_min_score,
+      PLUS any other role scoring ≥ 50 — EXCLUDING any job
       with status_override "skip" (⛔ NOGO), "interview", OR "follow-up" (updated
       8 July 2026, per user request — see FOLLOW-UP IS A SINGLE-SECTION
       OVERRIDE under b2 below: a follow-up job appears ONLY in 📌 Follow-up,
@@ -927,9 +1073,20 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
       Applied per rule b2 above, not here; see APPLIED VS CLOSED PRECEDENCE),
       PLUS ⛔ NOGO roles (status_override "skip", regardless of score or
       partnership-function match, and regardless of Applied/Rejected status —
-      NOGO is the one override nothing outranks), PLUS non-partnership roles
+      NOGO is the one override nothing outranks), PLUS ❌ title-keyword-excluded
+      roles (title_keyword_excluded: true in cache/jobs_seen_cache.json — added 16 July
+      2026, per user request; see TITLE KEYWORD EXCLUSION under DEDUPLICATION above —
+      these never had a score computed at all, so they cannot be evaluated against
+      other_roles_min_score or the partnership-function carve-out below; a job only
+      reaches this bucket if no higher-precedence status — NOGO, Closed-with-no-
+      application, Interview, Follow-up, or Applied/Rejected — already applies to it,
+      in which case that higher-precedence badge is shown instead of ❌), PLUS any
+      role — partnership-function or not — scoring below other_roles_min_score
+      (config.json, default 35; added 16
+      July 2026, per user request — see the MINIMUM SCORE FLOOR rule under Other Roles
+      above), PLUS non-partnership roles
       (e.g. pre-sales, account executive, technical, generic account manager)
-      scoring < 50 — EXCLUDING any job whose normalised company+title+location
+      scoring ≥ other_roles_min_score but < 50 — EXCLUDING any job whose normalised company+title+location
       already has status_override "interview" (that job belongs ONLY in 🎯 Open
       Interviews, per the same rule and incident described under Other Roles above). A job that is
       both low-scoring/non-partnership AND already Applied/Rejected, with no NOGO
@@ -941,55 +1098,77 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
       wins over Applied/Rejected — a Closed job you already applied to moves to
       Already Applied, not Excluded. Closed only keeps a job in Excluded when
       there is no Applied/Rejected status at all.
-      EXCLUDED SECTION DECLUTTER CHECKBOXES (added 8 July 2026, per user request):
-      add two checkboxes just below the 🚫 Excluded summary and above its
-      table-wrap, labelled with the status symbols themselves — "⛔ NOGO" and
-      "🔒 Closed" — NOT the word "Show" (updated 8 July 2026, per user request:
-      the label IS the symbol/text used elsewhere for that status, matching the
-      Status column exactly, not a generic "Show X" phrasing). These are a pure
-      client-side, per-view decluttering aid ONLY — they must NEVER affect the
+      LOW SCORE STATUS (added 16 July 2026, per user request): rows in the Excluded
+      table that reach Excluded purely on score grounds (below other_roles_min_score
+      regardless of function, OR non-partnership and scoring < 50 — i.e. every row that
+      would otherwise show a blank "—" Status because no NOGO/Closed override applies)
+      now show a "🔽 Low score" badge in the Status column instead of "—". This is a
+      status badge like ⛔ NOGO / 🔒 Closed, not a flag — it follows the same NOGO/CLOSED
+      BADGE PLACEMENT rule below (Status column only, never repeated next to the company
+      name or as leading text in Notes).
+      TITLE-KEYWORD-EXCLUDED STATUS (added 16 July 2026, per user request): rows in the
+      Excluded table with title_keyword_excluded: true in cache/jobs_seen_cache.json (and
+      no higher-precedence status — see TITLE KEYWORD EXCLUSION under DEDUPLICATION and
+      the Excluded rule above) show a "❌ Excluded" badge in the Status column. Same badge-
+      placement rules as NOGO/Closed/Low score apply (Status column only).
+      EXCLUDED SECTION DECLUTTER CHECKBOXES (added 8 July 2026, per user request; extended
+      16 July 2026 to a third checkbox for Low score, then a fourth for the ❌ Excluded
+      title-keyword status):
+      add four checkboxes just below the 🚫 Excluded summary and above its
+      table-wrap, labelled with the status symbols themselves — "⛔ NOGO",
+      "🔒 Closed", "🔽 Low score", and "❌ Excluded" — NOT the word "Show" (updated 8 July
+      2026, per user request: the label IS the symbol/text used elsewhere for that status,
+      matching the Status column exactly, not a generic "Show X" phrasing). These are
+      a pure client-side, per-view decluttering aid ONLY — they must NEVER affect the
       header stat-box counters (Closed count etc. always reflect true totals,
       regardless of what's currently hidden) and they do NOT persist across
-      runs on their own. Rows in the Excluded table that carry NEITHER a ⛔ NOGO
-      NOR a 🔒 Closed status (i.e. the low-score/non-partnership-fit rows with a
-      "—" status) are ALWAYS visible — neither checkbox applies to them; do not
-      add a third checkbox for them.
+      runs on their own. Every row in the Excluded table now carries exactly one of
+      the four statuses (⛔ NOGO / 🔒 Closed / 🔽 Low score / ❌ Excluded) — there is no
+      longer a row type with no matching checkbox (this REPLACES the pre-16-July-2026
+      behaviour where low-score/non-partnership-fit rows showed "—" and were always
+      visible with no checkbox).
       TICKED/UNTICKED DEFAULT IS CONFIG-DRIVEN (updated 8 July 2026, per user
-      request — this REPLACES the earlier hardcoded "both checked by default"):
+      request — this REPLACES the earlier hardcoded "both checked by default";
+      extended 16 July 2026 with the "low_score" key, then the "title_keyword" key):
       read config.json's "excluded_filter_defaults" object:
         {
           "excluded_filter_defaults": {
             "nogo": true,
-            "closed": true
+            "closed": true,
+            "low_score": true,
+            "title_keyword": true
           }
         }
       For each checkbox, if its value is true → include the `checked` attribute
       on that <input>; if false → omit it entirely (do not write
       `checked="false"` — like the `open` attribute on <details>, HTML boolean
-      attributes are only present or absent). If config.json lacks this key
-      (e.g. an older config.json), fall back to both `true` (the pre-existing
-      behaviour) without editing config.json. If the user asks in chat to
-      change one (e.g. "default the NOGO checkbox to unticked from now on"),
-      update the corresponding key in config.json — same mechanism as
-      report_section_defaults above, and the only way this persists across
+      attributes are only present or absent). If config.json lacks the "low_score" or
+      "title_keyword" key (e.g. an older config.json), fall back to `true` for whichever
+      is absent without editing config.json — same fallback behaviour as the original two
+      keys. If the user asks in chat to change one (e.g. "default the NOGO checkbox to
+      unticked from now on"), update the corresponding key in config.json — same
+      mechanism as report_section_defaults above, and the only way this persists across
       runs (the checkbox state itself still does not persist within a single
       already-open report across reloads — this only controls what state each
       FRESH report is generated with).
       Implementation: tag every <tr> in the excluded-table with a
       data-excl-status attribute — "nogo" if its Status cell is ⛔ NOGO, "closed"
-      if 🔒 Closed, "other" otherwise (the "other" tag is present for consistency
-      but no control ever hides it). Markup for the two checkboxes (place inside
-      a <div class="excl-filters"> immediately after the Excluded <summary> and
-      before its <div class="table-wrap">), with `checked` included/omitted per
-      the config values above — example shown with both true:
+      if 🔒 Closed, "low_score" if 🔽 Low score, "title_keyword" if ❌ Excluded (the
+      "low_score" tag was renamed 16 July 2026 from the old "other" tag now that it has
+      its own checkbox and badge; "title_keyword" is new the same day — every Excluded
+      row now falls into exactly one of these four). Markup for the four
+      checkboxes (place inside a <div class="excl-filters"> immediately after the
+      Excluded <summary> and before its <div class="table-wrap">), with `checked`
+      included/omitted per the config values above — example shown with all four true:
         <div class="excl-filters">
           <label><input type="checkbox" class="excl-toggle" data-status="nogo" checked> ⛔ NOGO</label>
           <label><input type="checkbox" class="excl-toggle" data-status="closed" checked> 🔒 Closed</label>
+          <label><input type="checkbox" class="excl-toggle" data-status="low_score" checked> 🔽 Low score</label>
+          <label><input type="checkbox" class="excl-toggle" data-status="title_keyword" checked> ❌ Excluded</label>
         </div>
-      CSS (add to every report's embedded <style> block):
-        .excl-filters { display: flex; gap: 20px; margin: 0 0 12px; font-size: 0.85rem; color: #a8b2d1; }
-        .excl-filters label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-        .excl-filters input[type="checkbox"] { accent-color: #64ffda; cursor: pointer; }
+      CSS: the `.excl-filters` rules live in css/report-style-template.css,
+      see MANDATORY STYLE REFERENCE below — copy them into every report's
+      embedded <style> block verbatim.
       JS (add once, just before </body>):
         <script>
         document.querySelectorAll('.excl-toggle').forEach(function(cb) {
@@ -1002,17 +1181,61 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
           });
         });
         </script>
+
+   ALREADY APPLIED FILTER BOX (added 24 August 2026, per user request — same pattern as the
+   Excluded filters above, applied to the 📂 Already Applied table): the Already Applied
+   table has exactly two possible Status values (🟠 Applied / 🔴 Rejected), so it gets a
+   two-checkbox filter box using the same markup/JS/CSS conventions as excl-filters.
+   TICKED/UNTICKED DEFAULT IS CONFIG-DRIVEN, same mechanism as excluded_filter_defaults:
+   read config.json's "applied_filter_defaults" object:
+     {
+       "applied_filter_defaults": {
+         "applied": true,
+         "rejected": true
+       }
+     }
+   If config.json lacks this key (older config.json), fall back to `true` for both without
+   editing config.json. If the user asks in chat to change one, update the corresponding key
+   in config.json.
+   Implementation: tag every <tr> in the Already Applied table with a data-app-status
+   attribute — "applied" if its Status cell is 🟠 Applied, "rejected" if 🔴 Rejected. Markup
+   for the two checkboxes (place inside a <div class="excl-filters"> — reuse the same CSS
+   class, no new CSS needed — immediately after the 📂 Already Applied <summary> and before
+   its <div class="table-wrap">), with `checked` included/omitted per the config values
+   above — example shown with both true:
+     <div class="excl-filters">
+       <label><input type="checkbox" class="app-toggle" data-app-status="applied" checked> 🟠 Applied</label>
+       <label><input type="checkbox" class="app-toggle" data-app-status="rejected" checked> 🔴 Rejected</label>
+     </div>
+   JS (add once, just before </body>, alongside the excl-toggle script block):
+     <script>
+     document.querySelectorAll('.app-toggle').forEach(function(cb) {
+       cb.addEventListener('change', function() {
+         var status = cb.getAttribute('data-app-status');
+         var rows = document.querySelectorAll('tr[data-app-status="' + status + '"]');
+         rows.forEach(function(row) {
+           row.style.display = cb.checked ? '' : 'none';
+         });
+       });
+     });
+     </script>
+
    - Each section sorted by descending score.
-   - Status badges: 🟠 Applied, 🔴 Rejected, ⛔ NOGO, 🔒 Closed.
+   - Status badges: 🟠 Applied, 🔴 Rejected, ⛔ NOGO, 🔒 Closed, 🔽 Low score, ❌ Excluded
+     (the latter two added 16 July 2026 — see LOW SCORE STATUS and TITLE-KEYWORD-EXCLUDED
+     STATUS above; together they replace the blank "—" previously shown for Excluded rows
+     reached purely on score or title-keyword grounds).
    - In tables AND cards, the Status field should show ONLY "Applied <date>"
-     or "Rejected <date>" — e.g. "Applied Jun 11", "Rejected Feb 2026".
-     No emoji badges, no notes, no extra context. Colour-code: applied in
+     or "Rejected <date>" — dates use DD-MM-YYYY, zero-padded, hyphen-separated
+     (added 2026-07-14, per user request — standardised to DD-MM-YYYY from the
+     previous 'Mon D'/'Mon YYYY' style), e.g. "Applied 11-06-2026",
+     "Rejected 03-02-2026". No emoji badges, no notes, no extra context. Colour-code: applied in
      orange, rejected in red (use CSS classes, not inline styles).
-     NOGO/closed rows are NOT greyed out (no reduced opacity/colour change) —
-     the ⛔/🔒 icons are sufficient to convey status.
-   - NOGO/CLOSED BADGE PLACEMENT — MANDATORY: the ⛔ NOGO / 🔒 Closed indicator
-     must appear ONLY in the Status column (tables) or the Status field (cards)
-     — nowhere else in the row/card. Specifically:
+     NOGO/closed/low-score rows are NOT greyed out (no reduced opacity/colour change) —
+     the ⛔/🔒/🔽 icons are sufficient to convey status.
+   - NOGO/CLOSED/LOW-SCORE/EXCLUDED BADGE PLACEMENT — MANDATORY: the ⛔ NOGO / 🔒 Closed /
+     🔽 Low score / ❌ Excluded indicator must appear ONLY in the Status column (tables) or
+     the Status field (cards) — nowhere else in the row/card. Specifically:
        a. Do NOT append a badge/span next to the company name (e.g. no
           "Company <span class='nogo-badge'>⛔ NOGO</span>" in the
           company-name cell).
@@ -1052,9 +1275,22 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
     - If the LinkedIn listing cannot be found (0 results or removed) → set "url" to "".
     Never leave "url" unset or null when a search was possible.
     The Follow-up table Link column must always render this url as a clickable link.
+
+    HIRING MANAGER / L1_CONTACTS SCOPE — FOLLOW-UP ONLY (updated 9 July 2026, per user
+    request: these fields are only ever displayed in the 📌 Follow-up table, so the lookup
+    work for them is now scoped to status_override "follow-up" entries only — NOT interview,
+    failed_interview, closed, skip, or any other status). For any entry whose status_override
+    is NOT "follow-up", leave hiring_manager_name, hiring_manager_linkedin, L1_contacts_url,
+    and L1_contacts at their blank/empty defaults ("", "", "", []) and do not attempt any
+    lookup for them, regardless of what the general rules below say. The rules below (hiring
+    manager resolution, L1_contacts_url/L1_contacts population) apply ONLY when the entry's
+    status_override is "follow-up" — including when an existing entry's status_override is
+    later changed TO "follow-up" (populate at that point) or changed AWAY from "follow-up"
+    (no need to backfill/clear retroactively, but no new lookups either).
+
     Each entry also has "hiring_manager_name" and "hiring_manager_linkedin" fields.
-    Populate these whenever the user provides the hiring manager's name or LinkedIn
-    profile URL in their command. Rules:
+    For status_override "follow-up" entries, populate these whenever the user provides the
+    hiring manager's name or LinkedIn profile URL in their command. Rules:
     - If the user provides both name and URL → use both directly.
     - If the user provides only a LinkedIn URL (no name) → navigate to that profile
       via Chrome browser tools and extract the full name from the page title or
@@ -1069,9 +1305,11 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
     Each entry also has an "L1_contacts_url" field storing the LinkedIn people
     search URL filtered to 1st-degree connections at that company:
       https://www.linkedin.com/search/results/people/?currentCompany=%5B%22COMPANY_ID%22%5D&network=%5B%22F%22%5D
-    MANDATORY — L1_contacts_url must be populated automatically whenever:
-    - A new entry is created in inputs/job_feedback.json (any status), OR
-    - The company name of an existing entry is changed.
+    MANDATORY (for status_override "follow-up" entries only) — L1_contacts_url must be
+    populated automatically whenever:
+    - A new "follow-up" entry is created in inputs/job_feedback.json, OR
+    - An existing entry's status_override is changed to "follow-up", OR
+    - The company name of an existing "follow-up" entry is changed.
     Process to build L1_contacts_url:
     1. Navigate to https://www.linkedin.com/search/results/companies/?keywords=COMPANY_NAME
        via Chrome browser tools.
@@ -1091,6 +1329,32 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
        - If 4+ contacts → leave L1_contacts as [] (display handled via L1_contacts_url).
     7. If the company cannot be found on LinkedIn, or the page is unavailable,
        set L1_contacts_url to "" and L1_contacts to []. Do NOT leave either unset.
+
+    NOGO SHORTCUT — SKIP ALL LOOKUPS (added 9 July 2026, per user request: NOGO feedback
+    is simple and frequent, and must never trigger the URL-search or L1_contacts browsing
+    process above, or any other Chrome/LinkedIn lookup). Whenever the user reports a job as
+    NOGO (status_override "skip"), do ONLY the following — no browser tools, no LinkedIn
+    searches, no L1_contacts lookup, nothing else:
+    1. Look up the job's job_id/url/location directly from cache/jobs_seen_cache.json (and
+       cache/jobs_page_cache.json if useful) using the company+title given by the user — this
+       is a local file read, not a LinkedIn search, and is fine to do. If no matching cached
+       job_id is found, set "url" to "" rather than searching LinkedIn for it.
+    2. Add the entry to inputs/job_feedback.json: status_override "skip", comment "NOGO",
+       date_added = today, url/location from step 1, hiring_manager_name/
+       hiring_manager_linkedin left blank, L1_contacts_url = "" and L1_contacts = []
+       (do not attempt to populate these — the MANDATORY L1_contacts_url process above does
+       NOT apply to NOGO entries). Back up job_feedback.json to .bak first, write, then
+       validate the write parses as JSON, per INCREMENTAL CACHE WRITES.
+    3. Refresh the report: move the job out of whichever section it was in (High Priority or
+       Other Roles) into 🚫 Excluded with the ⛔ NOGO status, and update any header counters
+       that changed (e.g. High Priority count if it was previously High Priority). This can
+       and should be done as a direct incremental edit of the existing report HTML file (per
+       the earlier "update JSON + refresh dashboard, don't rerun the pipeline" guidance) —
+       do not re-scan emails, re-score jobs, re-scan applications, or re-visit LinkedIn pages
+       for this.
+    Nothing else. This is intentionally narrower than the general "10b. URL FIELD" process
+    above, which still applies in full to every OTHER status (follow-up, interview,
+    failed_interview, closed, etc.) — only "skip"/NOGO gets this shortcut.
 
 10. ALWAYS regenerate the HTML dashboard after any update to inputs/job_feedback.json
     (new entries, status changes, comment edits). The report must stay in sync.
