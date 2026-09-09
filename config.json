@@ -9,12 +9,13 @@
   "other_roles_min_score": 35,
   "title_exclusion_keywords": ["marketing", "account executive", "enablement", "pre-sales", "presales"],
   "report_section_defaults": {
+    "next_steps": "open",
     "open_interviews": "open",
     "follow_up": "open",
     "failed_interviews": "collapsed",
     "high_priority": "open",
     "other_roles": "open",
-    "already_applied": "open",
+    "already_applied": "collapsed",
     "excluded": "open"
   },
   "excluded_filter_defaults": {
@@ -26,5 +27,17 @@
   "applied_filter_defaults": {
     "applied": true,
     "rejected": true
+  },
+  "applied_table_sort_default": {
+    "key": "date",
+    "direction": "desc"
+  },
+  "other_roles_table_sort_default": {
+    "key": "score",
+    "direction": "desc"
+  },
+  "followup_table_sort_default": {
+    "key": "applied",
+    "direction": "desc"
   }
 }

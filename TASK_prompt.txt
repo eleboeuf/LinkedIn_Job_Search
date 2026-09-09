@@ -195,6 +195,53 @@ the ONE master job list built above, not three freshly-rebuilt lists:
       different dates), merge them into a single entry (keep the more complete or most
       recent comment and url) rather than leaving both in the array, so future runs
       don't re-derive the same duplicate-row bug from duplicate source data.
+   f. SORT CONTROLS PRESENT — MANDATORY (added 1 September 2026, after the 30 August 2026
+      sort-control feature — see ALREADY APPLIED SORT CONTROLS / OTHER ROLES SORT CONTROLS /
+      FOLLOW-UP SORT CONTROLS above — silently disappeared from every report starting 31
+      August 2026: the embedded .sort-btn CSS rule kept getting copied forward into each
+      day's <style> block, which made the regression easy to miss at a glance, but the
+      actual <button class="sort-btn">/id="applied-table"/id="other-roles-table"/
+      id="followup-table"/sortAppliedTable()/sortOtherRolesTable()/sortFollowupTable() markup
+      and JS were completely absent. This went undetected for two days because whichever
+      report a run used as its "most recent report" structural reference had already lost
+      the feature, so the loss compounded silently rather than being caught). Before saving
+      the report, grep/search the generated HTML directly (do not infer from a prior day's
+      report, which may itself already be missing the feature) and confirm ALL of the
+      following are present:
+        - id="applied-table" on the 📂 Already Applied table, with its Score/Company/Status
+          Date sort-btn buttons and sortAppliedTable() function
+        - id="other-roles-table" on the 📋 Other Roles table, with its Score/Company sort-btn
+          buttons and sortOtherRolesTable() function
+        - id="followup-table" on the 📌 Follow-up table, with its Applied/Company sort-btn
+          buttons and sortFollowupTable() function
+        - id="excluded-table" on the 🚫 Excluded table, with its Score/Company sort-btn
+          buttons and sortExcludedTable() function (added 9 September 2026 — see EXCLUDED
+          SORT CONTROLS above)
+      If any are missing, add them per the exact markup/JS specified in the ALREADY APPLIED
+      SORT CONTROLS / OTHER ROLES SORT CONTROLS / FOLLOW-UP SORT CONTROLS / EXCLUDED SORT
+      CONTROLS sections above — do not treat a prior day's report lacking them as evidence
+      the feature was never required. This check is independent of and in addition to checks
+      (a)-(e) above.
+   g. LINKS PRESENT — MANDATORY (added 9 September 2026, after the 9 September 2026 run
+      generated 📋 Other Roles and 🚫 Excluded rows with every Title cell as plain text —
+      no <a href> at all — despite the existing "every job listed anywhere in the report
+      links to its LinkedIn posting" rule (see step 10b and the a0/a0b/a1 sections above).
+      This regressed silently the same way the SORT CONTROLS PRESENT check (f) above was
+      designed to catch: nothing forced a check before saving, and whichever prior report
+      a run used as its structural reference could itself already be missing the feature).
+      Before saving the report, grep/search the generated HTML directly (do not infer from a
+      prior day's report) and confirm that Title cells in the 📋 Other Roles table
+      (id="other-roles-table") and the 🚫 Excluded table (id="excluded-table") are wrapped
+      in <a href="https://www.linkedin.com/jobs/view/<job_id>/" target="_blank">...</a>
+      wherever a job_id/url can be confidently matched via cache/jobs_seen_cache.json (by
+      normalised company+title+location, per the CANONICAL RULE — UNIQUE ROLE IDENTIFIER
+      above) or via inputs/job_feedback.json's "url" field for rows sourced from a NOGO/
+      closed override. A row may legitimately stay as plain text only when no confident
+      match exists (ambiguous multiple candidates, or genuinely not found) — never fabricate
+      a job_id to force a link. Spot-check a sample of rows across both tables' different
+      statuses (nogo/closed/low_score/title_keyword in Excluded; a mix of scores in Other
+      Roles) rather than checking only the first few rows. This check is independent of and
+      in addition to checks (a)-(f) above.
    Do not consider the report finished until this reconciliation pass is done and any
    mismatches are corrected.
 
@@ -562,11 +609,11 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
 8b. LINKEDIN PAGE VISITS — check cache/jobs_page_cache.json before visiting any page.
    For each job, apply the following rules in order:
 
-   SKIP (no Chrome visit needed):
+   SKIP (no browser visit needed):
    - Job has title_keyword_excluded: true in cache/jobs_seen_cache.json (added 16 July 2026,
      per user request — see TITLE KEYWORD EXCLUSION under DEDUPLICATION above) → skip,
      permanently, regardless of checked_date or whether it has ever been visited before.
-     These jobs are excluded on title alone and must never reach Chrome.
+     These jobs are excluded on title alone and must never reach the browser.
    - Job is already marked status_override “closed” in inputs/job_feedback.json → skip.
    - Job ID is in cache/jobs_page_cache.json with open: false → skip (closed is permanent;
      if the role reopens LinkedIn assigns a new job ID).
@@ -658,7 +705,7 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
       visit and partition it into batches, e.g. as a scratch note or the task list —
       this is the dispatch ledger.
    b. A job ID may be written into cache/jobs_page_cache.json ONLY if its open/
-      closed/salary/applicants values came from an actual Chrome tool result
+      closed/salary/applicants values came from an actual browser tool result
       returned by a subagent (or performed directly) in THIS run, or were copied
       unchanged from a pre-existing cache/jobs_page_cache.json entry that itself
       already satisfied this rule on a prior run. Never write a value that was
@@ -683,10 +730,11 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
 9. Save the output file to the `reports/` subfolder as `reports/daily-job-report-YYYY-MM-DD.html` (using today's date).
    Output — a clean HTML dashboard with a DARK BLUE theme (navy background
    #0a1628, dark blue cards #112240, light text — never white/light backgrounds)
-   and the following sections, in order (🎯 Open Interviews, 💔 Failed Interviews, 📌 Follow-up,
-   ⭐ High Priority, 📋 Other Roles, 📂 Already Applied, 🚫 Excluded — see a0/a0b/a1/a/b/b2/c below):
+   and the following sections, in order (🔝 Top Priority, 🎯 Open Interviews, 💔 Failed Interviews,
+   📌 Follow-up, ⭐ High Priority, 📋 Other Roles, 📂 Already Applied, 🚫 Excluded — see
+   a-1/a0/a0b/a1/a/b/b2/c below):
    ALL SECTIONS COLLAPSIBLE (added 8 July 2026, per user request): every section
-   listed above (🎯 Open Interviews, 💔 Failed Interviews, 📌 Follow-up, ⭐ High
+   listed above (🔝 Top Priority, 🎯 Open Interviews, 💔 Failed Interviews, 📌 Follow-up, ⭐ High
    Priority, 📋 Other Roles, 📂 Already Applied, 🚫 Excluded) must be wrapped in a
    native HTML <details class="section-details">...<summary>...</summary>...</details>
    element instead of a plain <div class="section-title">...</div> heading, so each
@@ -699,22 +747,26 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    "collapsed":
      {
        "report_section_defaults": {
+         "next_steps": "open",
          "open_interviews": "open",
          "follow_up": "open",
          "failed_interviews": "collapsed",
          "high_priority": "open",
          "other_roles": "open",
-         "already_applied": "open",
+         "already_applied": "collapsed",
          "excluded": "open"
        }
      }
+   (already_applied changed from "open" to "collapsed" on 4 September 2026, per
+   user request — see config.json for the live value.)
    For each section, if its value is "open" → include the `open` attribute on
    that section's <details> tag; if "collapsed" → omit the `open` attribute
    entirely (do not write `open="false"` — HTML boolean attributes are only
    present or absent). If config.json does not yet have a
    "report_section_defaults" key (e.g. an older config.json), fall back to the
-   values shown above (all open except failed_interviews collapsed) as the
-   built-in default, and do NOT fail the run — just proceed with those values
+   values shown above (all open except failed_interviews and already_applied
+   collapsed) as the built-in default, and do NOT fail the run — just proceed
+   with those values
    without editing config.json (that's the user's choice to add, not something
    to silently write in). If the user asks in chat to change a section's
    default (e.g. "collapse Other Roles by default from now on"), update the
@@ -825,6 +877,189 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    on the same card/row. Do not silently drop the other job ID(s) without a trace; optionally
    note them in the card/row's Notes as "Also reposted as job <id>" if there's room, but this
    is informational only, not mandatory.
+   a-1. 🔝 Top Priority section (added 4 September 2026, per user request — positioned
+       IMMEDIATELY ABOVE 🎯 Open Interviews, i.e. the very first section in the report;
+       renamed from "🗺️ Next Steps" to "🔝 Top Priority" later the same day, per user
+       request — only the section title/summary text changed, its config key remains
+       report_section_defaults.next_steps and internal card classes are unchanged).
+       Uses the shared <details class="section-details"><summary>...</summary>...</details>
+       pattern like every other section (its config key is report_section_defaults.next_steps,
+       default "open" — see the OPEN/COLLAPSED DEFAULT PER SECTION rule above). Inside the
+       <details>, render a 2-column side-by-side grid (revised AGAIN 4 September 2026, per
+       user request — REVERTS the full-width single-axis SVG + full-width Next Steps table
+       stacked layout from earlier the same day, back to a 2-column `.next-steps-grid` side
+       by side layout; the Next Steps card/table itself, rule a-1.b, is unchanged — only its
+       position moved back into the right-hand grid cell). The Interviews Timeline (left
+       cell) is also redesigned this same revision from a single merged-axis SVG into a
+       grouped per-company LANE VIEW SVG — see rule a-1.a below for the full new algorithm:
+       <details class="section-details" open>
+       <summary>🔝 Top Priority</summary>
+         <div class="next-steps-grid">
+           <div class="timeline-card">
+             <div class="next-steps-card-title">Interviews Timeline</div>
+             <svg viewBox="0 0 1000 {height}" ...> ... </svg>
+           </div>
+           <div class="nextstep-card">
+             <div class="next-steps-card-title">Next Steps</div>
+             <table class="data-table"> ... </table>
+           </div>
+         </div>
+       </details>
+       CSS: `.next-steps-grid` is a 2-column CSS grid (`grid-template-columns: 1fr 1fr;
+       gap: 16px; margin-bottom: 16px;`), collapsing to a single column under ~700px
+       viewport width via a media query, same as the very first version of this section
+       had. `.timeline-card` and `.nextstep-card` are both dark cards (background #112240,
+       border 1px solid #1e3a5f, border-radius 8px, padding 14px) filling their grid cell.
+       `.next-steps-card-title` (small uppercase label, color #8892b0, margin-bottom 8px,
+       matching `.lbl` in stat boxes) lives in css/report-style-template.css alongside the
+       other section-specific rules. The Next Steps table uses the shared `.data-table`
+       class (no new table-level class needed). The old `.interview-timeline-wrap` and
+       `.timeline-undated` classes from the previous full-width revision are removed —
+       "undated" companies are no longer listed in a separate div below the SVG; they now
+       get their own lane inside the SVG itself (see step 6 of rule a-1.a below).
+       a. INTERVIEWS TIMELINE — GRAPHICAL SVG, GROUPED LANE VIEW (revised AGAIN 4 September
+          2026, per user request — this is "option 3", REPLACES the single merged-axis
+          version ("option 2") from earlier the same day, which mixed every company's dots
+          onto one shared horizontal line; that made same-day/close-together interviews
+          from different companies hard to tell apart. The new version renders ONE
+          HORIZONTAL LANE PER COMPANY (job) in 🎯 Open Interviews, all lanes sharing the
+          same horizontal date axis/scale, stacked vertically — company identity is now
+          the row, not a floating label near a dot. Rendered as a single inline `<svg>`,
+          computed fresh on every run — never a static image, never cached. The exact
+          algorithm:
+          1. DATA COLLECTION — take every inputs/job_feedback.json entry with
+             status_override "interview" (i.e. every job shown in 🎯 Open Interviews).
+             Each such job becomes exactly one LANE, regardless of how many interview
+             dates it has. For each job, expand every entry in its "interviews" array
+             (date, stage, optional note) into one (date, stage) point belonging to that
+             job's lane. Jobs with no "interviews" array, or an empty one, still get a
+             lane (with zero points) — handled in step 6 below, never omitted.
+          2. DATE RANGE — let `today` be the report-generation date. Compute
+             `min_date = min(all interview dates across all lanes ∪ {today})` and
+             `max_date = max(all interview dates across all lanes ∪ {today})`. Including
+             `today` in the min/max guarantees the axis always spans across today even if
+             no interview falls exactly on it.
+          3. LANE ORDER — order lanes top-to-bottom by each job's EARLIEST interview date
+             ascending (a job with no dates at all has no "earliest date" and is NOT used
+             for this ordering — see next sentence). Jobs with at least one dated
+             interview are ordered first, earliest-first; jobs with zero dated interviews
+             (empty "interviews" array) are placed AFTER all dated lanes, in whatever
+             order they naturally occur in job_feedback.json. Ties among dated lanes
+             (same earliest date) are broken by original job_feedback.json array order.
+          4. SVG FRAME AND DIMENSIONS — let `laneHeight = 32`, `topMargin = 30` (space
+             above the lanes for the "Today" label), `bottomMargin = 10`, and
+             `n = number of lanes`. Total height
+             `H = topMargin + n * laneHeight + bottomMargin`.
+             `viewBox="0 0 1000 {H}"`, rendered with `style="width:100%; height:{H}px;"
+             so it scales responsively to the container width while growing vertically
+             with the number of lanes. The shared date axis runs horizontally from
+             `x=140` to `x=960` (x=140 leaves room on the left for the company-name row
+             labels, unlike the old version where labels floated near dots — this is the
+             key layout change of this revision).
+          5. LANE Y-POSITION — for lane index `i` (0-based, top to bottom, per the order
+             from step 3), its vertical center is
+             `y_center(i) = topMargin + i * laneHeight + laneHeight / 2`.
+          6. LANE GUIDE LINE + COMPANY LABEL — for every lane, regardless of whether it
+             has any dots, draw a faint horizontal guide `<line x1="140" y1="{y_center}"
+             x2="960" y2="{y_center}" stroke="#1e3a5f" stroke-width="1.5">` so it reads as
+             a "lane" tied to the shared axis. To the left of x=140, print the company
+             name as a left-aligned `<text x="10" y="{y_center - 3}" font-size="12"
+             font-weight="700" fill="#e6f1ff">` (vertically the label sits a few px above
+             lane-center to leave room for the title line below it), and — if it fits —
+             the job title as a second, smaller, muted line `<text x="10"
+             y="{y_center + 10}" font-size="9" fill="#8892b0">`. Truncate the company name
+             to ~20 characters and the title to ~26 characters with a trailing "…" if
+             longer (use judgement here, this is a soft guideline not a hard rule) so
+             neither line overruns into the x=140 axis start.
+          7. DATE-TO-X MAPPING — for any date `d`, let `span_days = (max_date -
+             min_date)` in days. If `span_days == 0` (only one distinct date across
+             everything, including today — an edge case), place every point at
+             `x = (140 + 960) / 2 = 550`. Otherwise:
+             `x = 140 + (d - min_date).days / span_days * (960 - 140)`.
+             This is the ONE mapping formula used for every dot, the today-marker, and
+             any connecting lines — never a second ad-hoc formula. It is identical in
+             spirit to the old single-axis version, just re-scoped to the 140–960 margin.
+          8. DOTS — for each dated point in a lane, draw a `<circle cx="{x}"
+             cy="{y_center of its lane}" r="6">` at that date's mapped x. Color by
+             comparing `date` to `today` — UNCHANGED from the old version:
+               - Past (date < today): `fill="#6b3d12"` with `stroke="#d97706"`
+                 stroke-width 2 (muted orange, matches `.timeline-row-past`).
+               - Today (date == today): `fill="#64ffda"` (mint accent) with
+                 `stroke="#0a1628"` stroke-width 2.
+               - Future (date > today): `fill="#1f4a34"` with `stroke="#22c55e"`
+                 stroke-width 2 (muted green, matches `.timeline-row-future`).
+          9. SAME-COMPANY CONNECTING LINE — if a lane has more than one dot (e.g. Braze's
+             3 interview rounds), draw ONE thin connecting `<line y1="{y_center}"
+             y2="{y_center}">` from its earliest dot's x to its latest dot's x, styled
+             `stroke="#8892b0" stroke-width="3" opacity="0.5"`, drawn BEFORE the dot
+             circles so the dots render on top of it. This is now trivial compared to the
+             old cross-axis version since each company already owns its own lane — only
+             one line per multi-dot lane, spanning its full min-to-max x range.
+          10. PER-DOT DATE/STAGE LABELS — small text `fill="#ccd6f6"`, `font-size="10"`,
+              format DD-MM-YYYY followed by " · " and the stage (omit the " · stage"
+              suffix if the point has no stage):
+                - Lane with exactly ONE dot: label goes directly to the right of the dot,
+                  `text-anchor="start"` at `x = dot_x + 10`, `y = y_center + 4`.
+                - Lane with MULTIPLE dots: label only the FIRST and LAST dot (chronologically)
+                  to avoid clutter — any middle dot(s) stay unlabeled, relying on the
+                  shared axis for approximate date reading. The first dot's label is
+                  staggered BELOW its lane's guide line (`text-anchor="middle"`, `x =
+                  dot_x`, `y = y_center + 18`); the last dot's label is staggered ABOVE
+                  (`text-anchor="middle"`, `x = dot_x`, `y = y_center - 12`).
+                - EDGE-OF-CHART OVERRIDE: for any label (single-dot or first/last of a
+                  multi-dot lane) whose dot x-position exceeds 900 — i.e. close enough to
+                  the right edge (x=960) that a centered or right-extending label would be
+                  clipped by the viewBox's right edge (x=1000) — instead anchor the label
+                  to END at the dot's x (`text-anchor="end"`, `x = dot_x`, extending
+                  leftward) at `y = y_center - 12`, so it never overflows the frame.
+          11. UNDATED LANES — a lane with zero dated interviews (empty "interviews"
+              array, e.g. Siemens) still gets its guide line and company-name label per
+              step 6, but no dots. Instead, print a single small centered `<text x="550"
+              y="{y_center + 4}" text-anchor="middle" font-size="11" fill="#8892b0"
+              font-style="italic">Undated</text>` roughly at the lane's horizontal
+              midpoint, so the lane is never silently empty-looking or dropped.
+          12. TODAY MARKER — always draw ONE vertical dashed line spanning the full
+              height of all lanes at today's mapped x, regardless of whether any
+              interview falls on that date: `<line x1="{x_today}" y1="{topMargin - 8}"
+              x2="{x_today}" y2="{topMargin + n*laneHeight + 2}" stroke="#64ffda"
+              stroke-width="2" stroke-dasharray="4,3">`, plus a centered label
+              `<text x="{x_today}" y="{topMargin - 14}" text-anchor="middle"
+              font-size="11" font-weight="700" fill="#64ffda">Today</text>` above the
+              lanes.
+          13. RENDER ORDER in the SVG markup: all lane guide lines first, then all
+              same-company connector lines, then the today-marker line + label, then all
+              dot circles, then all per-dot date/stage labels, then all company-name/title
+              labels last (so circles sit above connectors/guides, and text sits above
+              everything else).
+       b. NEXT STEPS CARD (renamed 4 September 2026, per user request — was "Next Step",
+          now "Next Steps"; only the card title text changed, the CSS class
+          `.nextstep-card` and the field names `next_step`/`next_step_due_date` are
+          unchanged) — one row per job currently shown in 🎯 Open Interviews OR
+          📌 Follow-up that has a non-empty "next_step" field. Columns: Due, Company,
+          Title, Next Step (the free-text value). Sorted chronologically ASCENDING by
+          "next_step_due_date"; entries with no due date (null/absent) go at the end, in
+          whatever order they naturally occur (do not further sort them). Due column shows
+          the date, or "—" when next_step_due_date is absent. If NO job in Open Interviews
+          or Follow-up currently has a non-empty "next_step" value, render a single
+          lightweight placeholder row instead of an empty table body, e.g.
+          `<tr><td colspan="4" style="color:#8892b0;font-style:italic;">No next steps
+          recorded yet.</td></tr>` — do not break or omit the card.
+          COLUMN WIDTHS (added 4 September 2026, per user request — the Due date was
+          wrapping onto two lines, and Title needed more room): the table carries an
+          extra class `data-table nextstep-table` and a `<colgroup>` with explicit
+          widths: `<colgroup><col style="width:100px"><col style="width:15%">
+          <col style="width:30%"><col></colgroup>` (Due 100px fixed, Company 15%,
+          Title 30% — a 20% increase over the ~25% width it would otherwise get
+          under auto layout, Next Step takes the remaining space). The
+          `.nextstep-table` CSS class sets `table-layout: fixed` and
+          `white-space: nowrap` on the first column (Due) so the DD-MM-YYYY date
+          always renders on a single line regardless of card width — see
+          css/report-style-template.css.
+          ROW SPACING (added 4 September 2026, per user request — reduce the vertical
+          spacing above/below the text in each row): `.nextstep-table th`/`td` set
+          `padding-top: 5px; padding-bottom: 5px;`, overriding the shared
+          `.data-table` default of 10px top/bottom (left/right padding of 12px is
+          unchanged) — see css/report-style-template.css.
    a0. 🎯 Open Interviews cards: all jobs with status_override "interview" in
        inputs/job_feedback.json. Show company name, job title, comment, and a
        "View Job →" link to the LinkedIn posting (added 8 July 2026, per user
@@ -968,6 +1203,72 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
        shown in the Applied column. Only include additional context (e.g.
        "Reapplied 19/06", "Contacted CRO, no response"). Leave blank if
        there is nothing beyond the application date to say.
+
+       FOLLOW-UP SORT CONTROLS (added 30 August 2026, per user request): the 📌 Follow-up
+       table gets two client-side sort buttons — Applied, Company — using the same pattern
+       as the ALREADY APPLIED SORT CONTROLS and OTHER ROLES SORT CONTROLS documented under
+       step 9 below (same .excl-filters container reuse, same .sort-btn CSS, same
+       client-side-only/no-header-counter-impact behaviour, same btn.parentElement-scoped
+       active-class clearing — see the IMPORTANT note under those sections for why). The
+       table's id is id="followup-table"; the Applied column is column index 0 (plain
+       DD-MM-YYYY text, not wrapped in a status span like the Already Applied table's date).
+       Default comes from its own config.json key:
+         {
+           "followup_table_sort_default": {
+             "key": "applied",
+             "direction": "desc"
+           }
+         }
+       "key" is "applied" or "company"; fall back to {key: "applied", direction: "desc"} if
+       absent from config.json — this also matches the table's pre-existing default sort
+       order ("Sorted by application date newest first" above), so the fallback changes
+       nothing about default behaviour, it just makes that default reconfigurable in chat the
+       same way the other tables' sort defaults are.
+       Markup (place immediately after the 📌 Follow-up <summary> and before its
+       <div class="followup-wrap">):
+         <div class="excl-filters" style="margin-top:-4px;">
+           <span style="color:#8892b0;font-size:0.85em;margin-right:6px;">Sort by:</span>
+           <button type="button" class="sort-btn" data-sort-key="applied" onclick="sortFollowupTable('applied', this)">Applied</button>
+           <button type="button" class="sort-btn" data-sort-key="company" onclick="sortFollowupTable('company', this)">Company</button>
+         </div>
+       Apply the configured default at render time the same two ways as the other sort
+       controls (active class + label arrow on the matching button, AND the rows written into
+       the HTML already in that order — do not rely on JS alone for the default state).
+       JS (add once, just before </body>, alongside the other sort/toggle script blocks):
+         <script>
+         var followupSortState = {key: '<default key>', asc: <true if direction is "asc" else false>};
+         function parseFollowupDate(text) {
+           var m = text.match(/(\d{2})-(\d{2})-(\d{4})/);
+           if (!m) return 0;
+           return new Date(parseInt(m[3]), parseInt(m[2])-1, parseInt(m[1])).getTime();
+         }
+         function sortFollowupTable(key, btn) {
+           var table = document.getElementById('followup-table');
+           var rows = Array.prototype.slice.call(table.querySelectorAll('tr')).slice(1);
+           if (followupSortState.key === key) {
+             followupSortState.asc = !followupSortState.asc;
+           } else {
+             followupSortState.key = key;
+             followupSortState.asc = (key === 'company');
+           }
+           rows.sort(function(a, b) {
+             var va, vb;
+             if (key === 'applied') {
+               va = parseFollowupDate(a.children[0].textContent);
+               vb = parseFollowupDate(b.children[0].textContent);
+             } else if (key === 'company') {
+               va = a.children[1].textContent.trim().toLowerCase();
+               vb = b.children[1].textContent.trim().toLowerCase();
+             }
+             if (va < vb) return followupSortState.asc ? -1 : 1;
+             if (va > vb) return followupSortState.asc ? 1 : -1;
+             return 0;
+           });
+           rows.forEach(function(row) { table.appendChild(row); });
+           if (btn && btn.parentElement) { Array.prototype.slice.call(btn.parentElement.querySelectorAll('.sort-btn')).forEach(function(b) { b.classList.remove('active'); }); }
+           if (btn) btn.classList.add('active');
+         }
+         </script>
    a. ⭐ High Priority cards: score ≥ 75, not NOGO/closed, not status_override
       "interview", not status_override "follow-up" (updated 8 July 2026, per
       user request — see FOLLOW-UP IS A SINGLE-SECTION OVERRIDE under b2 below:
@@ -1028,6 +1329,71 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
       "interview"/High-Priority/Already-Applied placement. A same company+title
       posting in a genuinely DIFFERENT location is a different role and is NOT
       excluded on this basis.
+
+      OTHER ROLES SORT CONTROLS (added 30 August 2026, per user request): the 📋 Other Roles
+      table gets two client-side sort buttons — Score, Company — using the same pattern as
+      the ALREADY APPLIED SORT CONTROLS documented under rule b2 below (same .excl-filters
+      container reuse, same .sort-btn CSS, same client-side-only/no-header-counter-impact
+      behaviour). Differences from the Already Applied version: only two buttons (no Status
+      Date option, since Other Roles rows have no date), the table's id is
+      id="other-roles-table" (not "applied-table"), and the default comes from a separate
+      config.json key:
+        {
+          "other_roles_table_sort_default": {
+            "key": "score",
+            "direction": "desc"
+          }
+        }
+      "key" is "score" or "company"; fall back to {key: "score", direction: "desc"} if this
+      key is absent from config.json, same fallback convention as every other *_defaults key.
+      Markup (place immediately after the 📋 Other Roles <summary> and before its
+      <div class="table-wrap">):
+        <div class="excl-filters" style="margin-top:-4px;">
+          <span style="color:#8892b0;font-size:0.85em;margin-right:6px;">Sort by:</span>
+          <button type="button" class="sort-btn" data-sort-key="score" onclick="sortOtherRolesTable('score', this)">Score</button>
+          <button type="button" class="sort-btn" data-sort-key="company" onclick="sortOtherRolesTable('company', this)">Company</button>
+        </div>
+      As with the Already Applied version, apply the configured default at render time in two
+      ways: append " ▾"/" ▴" and class="active" to the matching button, AND pre-sort the rows
+      into that order before writing the HTML (don't rely on JS alone for the default state).
+      JS (add once, just before </body>, alongside the other sort/toggle script blocks):
+        <script>
+        var otherRolesSortState = {key: '<default key>', asc: <true if direction is "asc" else false>};
+        function sortOtherRolesTable(key, btn) {
+          var table = document.getElementById('other-roles-table');
+          var rows = Array.prototype.slice.call(table.querySelectorAll('tr')).slice(1);
+          if (otherRolesSortState.key === key) {
+            otherRolesSortState.asc = !otherRolesSortState.asc;
+          } else {
+            otherRolesSortState.key = key;
+            otherRolesSortState.asc = (key === 'company');
+          }
+          rows.sort(function(a, b) {
+            var va, vb;
+            if (key === 'score') {
+              va = parseInt(a.children[0].textContent) || 0;
+              vb = parseInt(b.children[0].textContent) || 0;
+            } else if (key === 'company') {
+              va = a.children[1].textContent.trim().toLowerCase();
+              vb = b.children[1].textContent.trim().toLowerCase();
+            }
+            if (va < vb) return otherRolesSortState.asc ? -1 : 1;
+            if (va > vb) return otherRolesSortState.asc ? 1 : -1;
+            return 0;
+          });
+          rows.forEach(function(row) { table.appendChild(row); });
+          if (btn && btn.parentElement) { Array.prototype.slice.call(btn.parentElement.querySelectorAll('.sort-btn')).forEach(function(b) { b.classList.remove('active'); }); }
+          if (btn) btn.classList.add('active');
+        }
+        </script>
+      IMPORTANT — SCOPE THE ACTIVE-CLASS CLEAR TO THE CLICKED BUTTON'S OWN GROUP: both this
+      table's sort buttons and the Already Applied table's sort buttons share the same
+      .sort-btn CSS class. The active-class-clearing step in each sort function must only
+      clear buttons within btn.parentElement (the clicked button's own .excl-filters group),
+      never a page-wide document.querySelectorAll('.sort-btn') — otherwise sorting one table
+      would incorrectly clear the "active" indicator on the other table's sort buttons. Both
+      script blocks above already do this correctly (via btn.parentElement) — do not
+      regress to a page-wide selector.
    b2. 📂 Already Applied table (added 8 July 2026, per user request — positioned in the
       report between 📋 Other Roles and 🚫 Excluded): ALL jobs whose resolved status
       (per STEP 7d / the check-job-status skill) is 🟠 Applied or 🔴 Rejected,
@@ -1182,6 +1548,55 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
         });
         </script>
 
+      EXCLUDED SORT CONTROLS (added 9 September 2026, per user request): the 🚫 Excluded
+      table gets two client-side sort buttons — Score, Company — using the same pattern as
+      the OTHER ROLES SORT CONTROLS above (same .excl-filters container reuse, same .sort-btn
+      CSS, same client-side-only/no-header-counter-impact behaviour). The table's
+      <table class="data-table excluded-table"> tag must also carry id="excluded-table" (no
+      other table in the report needs this id). Default sort is score descending, matching
+      the table's existing implicit render order — no config.json key needed for this one,
+      unlike the other sort-control tables.
+      Markup (place immediately after the excl-toggle checkboxes div and before the
+      Excluded <div class="table-wrap">):
+        <div class="excl-filters" style="margin-top:-4px;">
+          <span style="color:#8892b0;font-size:0.85em;margin-right:6px;">Sort by:</span>
+          <button type="button" class="sort-btn active" data-sort-key="score" onclick="sortExcludedTable('score', this)">Score ▾</button>
+          <button type="button" class="sort-btn" data-sort-key="company" onclick="sortExcludedTable('company', this)">Company</button>
+        </div>
+      JS (add once, just before </body>, alongside the other sort/toggle script blocks):
+        <script>
+        var excludedSortState = {key: 'score', asc: false};
+        function sortExcludedTable(key, btn) {
+          var table = document.getElementById('excluded-table');
+          var rows = Array.prototype.slice.call(table.querySelectorAll('tr')).slice(1);
+          if (excludedSortState.key === key) {
+            excludedSortState.asc = !excludedSortState.asc;
+          } else {
+            excludedSortState.key = key;
+            excludedSortState.asc = (key === 'company');
+          }
+          rows.sort(function(a, b) {
+            var va, vb;
+            if (key === 'score') {
+              va = parseInt(a.children[0].textContent) || 0;
+              vb = parseInt(b.children[0].textContent) || 0;
+            } else if (key === 'company') {
+              va = a.children[1].textContent.trim().toLowerCase();
+              vb = b.children[1].textContent.trim().toLowerCase();
+            }
+            if (va < vb) return excludedSortState.asc ? -1 : 1;
+            if (va > vb) return excludedSortState.asc ? 1 : -1;
+            return 0;
+          });
+          rows.forEach(function(row) { table.appendChild(row); });
+          if (btn && btn.parentElement) { Array.prototype.slice.call(btn.parentElement.querySelectorAll('.sort-btn')).forEach(function(b) { b.classList.remove('active'); }); }
+          if (btn) btn.classList.add('active');
+        }
+        </script>
+      IMPORTANT — same btn.parentElement-scoped active-class-clearing rule as the other
+      sort-button tables applies here too: never a page-wide document.querySelectorAll('.sort-btn')
+      clear, since Other Roles/Already Applied/Excluded all share the .sort-btn CSS class.
+
    ALREADY APPLIED FILTER BOX (added 24 August 2026, per user request — same pattern as the
    Excluded filters above, applied to the 📂 Already Applied table): the Already Applied
    table has exactly two possible Status values (🟠 Applied / 🔴 Rejected), so it gets a
@@ -1220,6 +1635,96 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
      });
      </script>
 
+   ALREADY APPLIED SORT CONTROLS (added 30 August 2026, per user request): the 📂 Already
+   Applied table additionally gets three client-side sort buttons — Score, Company, Status
+   Date — placed in their own <div class="excl-filters"> (reuse the same CSS class, no new
+   layout container needed) immediately below the app-toggle filter box and above the
+   <div class="table-wrap">. This is a pure client-side row-reorder aid, like the excl-toggle/
+   app-toggle checkboxes — it never affects header counters or the underlying cache/feedback
+   data, and does not persist across runs on its own (each fresh report is generated with the
+   configured default applied, per below).
+   The <table class="data-table roles-table"> for this section must carry id="applied-table"
+   so the sort JS can target it specifically (no other table in the report needs this id).
+   Markup for the three buttons:
+     <div class="excl-filters" style="margin-top:-4px;">
+       <span style="color:#8892b0;font-size:0.85em;margin-right:6px;">Sort by:</span>
+       <button type="button" class="sort-btn" data-sort-key="score" onclick="sortAppliedTable('score', this)">Score</button>
+       <button type="button" class="sort-btn" data-sort-key="company" onclick="sortAppliedTable('company', this)">Company</button>
+       <button type="button" class="sort-btn" data-sort-key="date" onclick="sortAppliedTable('date', this)">Status Date</button>
+     </div>
+   DEFAULT SORT IS CONFIG-DRIVEN — read config.json's "applied_table_sort_default" object:
+     {
+       "applied_table_sort_default": {
+         "key": "date",
+         "direction": "desc"
+       }
+     }
+   "key" is one of "score" / "company" / "date" (matching the three buttons' data-sort-key
+   values); "direction" is "asc" or "desc". If config.json lacks this key (older config.json),
+   fall back to {key: "date", direction: "desc"} without editing config.json — same fallback
+   convention as report_section_defaults/excluded_filter_defaults/applied_filter_defaults
+   above. If the user asks in chat to change the default (e.g. "default to sorting by score
+   descending"), update this key in config.json — the only way the default persists across
+   runs, same mechanism as the other *_defaults keys.
+   At render time, apply the configured default two ways: (1) append " ▾" (desc) or " ▴" (asc)
+   to the matching button's label and add class="sort-btn active" to it (the other two buttons
+   get plain class="sort-btn"); (2) sort the table's data rows into that order before writing
+   them into the HTML, so the report is correct even with JavaScript disabled — do not rely on
+   the client-side script alone to produce the default order.
+   JS (add once, just before </body>, alongside the excl-toggle/app-toggle script blocks):
+     <script>
+     var appliedSortState = {key: '<default key>', asc: <true if direction is "asc" else false>};
+     function parseAppliedDate(text) {
+       var m = text.match(/(\d{2})-(\d{2})-(\d{4})/);
+       if (!m) return 0;
+       return new Date(parseInt(m[3]), parseInt(m[2])-1, parseInt(m[1])).getTime();
+     }
+     function sortAppliedTable(key, btn) {
+       var table = document.getElementById('applied-table');
+       var rows = Array.prototype.slice.call(table.querySelectorAll('tr')).slice(1);
+       if (appliedSortState.key === key) {
+         appliedSortState.asc = !appliedSortState.asc;
+       } else {
+         appliedSortState.key = key;
+         appliedSortState.asc = (key === 'company');
+       }
+       rows.sort(function(a, b) {
+         var va, vb;
+         if (key === 'score') {
+           va = parseInt(a.children[0].textContent) || 0;
+           vb = parseInt(b.children[0].textContent) || 0;
+         } else if (key === 'company') {
+           va = a.children[1].textContent.trim().toLowerCase();
+           vb = b.children[1].textContent.trim().toLowerCase();
+         } else if (key === 'date') {
+           va = parseAppliedDate(a.children[5].textContent);
+           vb = parseAppliedDate(b.children[5].textContent);
+         }
+         if (va < vb) return appliedSortState.asc ? -1 : 1;
+         if (va > vb) return appliedSortState.asc ? 1 : -1;
+         return 0;
+       });
+       rows.forEach(function(row) { table.appendChild(row); });
+       if (btn && btn.parentElement) { Array.prototype.slice.call(btn.parentElement.querySelectorAll('.sort-btn')).forEach(function(b) { b.classList.remove('active'); }); }
+       if (btn) btn.classList.add('active');
+     }
+     </script>
+   IMPORTANT — SCOPE THE ACTIVE-CLASS CLEAR TO THE CLICKED BUTTON'S OWN GROUP (see the
+   matching note under OTHER ROLES SORT CONTROLS below): use btn.parentElement to scope the
+   active-class clear, never a page-wide document.querySelectorAll('.sort-btn') — the Already
+   Applied and Other Roles tables share the .sort-btn CSS class, and a page-wide clear would
+   incorrectly reset the other table's active button when either is sorted.
+   Score sorts numerically descending-first-click (ties are stable/whatever DOM order they
+   arrive in); Company sorts alphabetically ascending-first-click; Status Date parses the
+   DD-MM-YYYY date out of the Status cell (column index 5, 0-based) regardless of whether it
+   reads "🟠 Applied ..." or "🔴 Rejected ...". Clicking the same button again reverses that
+   column's current direction; clicking a different button starts that column at its natural
+   first-click direction (score/date descending, company ascending) as coded above.
+   The CSS for `.sort-btn` / `.sort-btn:hover` / `.sort-btn.active` lives in
+   css/report-style-template.css alongside the existing `.excl-filters` rules — copy it into
+   every report's embedded <style> block verbatim, same as every other rule under MANDATORY
+   STYLE REFERENCE below.
+
    - Each section sorted by descending score.
    - Status badges: 🟠 Applied, 🔴 Rejected, ⛔ NOGO, 🔒 Closed, 🔽 Low score, ❌ Excluded
      (the latter two added 16 July 2026 — see LOW SCORE STATUS and TITLE-KEYWORD-EXCLUDED
@@ -1253,6 +1758,28 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
    - For High Priority cards, colour the "View Job →" button to match status:
      applied → orange (btn-applied), rejected → red (btn-rejected).
      Use CSS classes, not inline styles.
+10d. INTERVIEW TIMELINE / NEXT STEP FIELDS — inputs/job_feedback.json entries support three
+    additional optional fields (added 4 September 2026, per user request, backward compatible
+    — older entries without these fields are simply treated as having none of them; do not
+    backfill them retroactively except where explicitly instructed below):
+    - "interviews": an array of {"date": "YYYY-MM-DD", "stage": "<free text, e.g. '1st round',
+      '2nd round', 'Final'>", "note": "<optional free text>"} objects. Attach this to entries
+      with status_override "interview" (and it may also exist on "failed_interview" entries,
+      to preserve interview history for a role that ultimately fell through). This array holds
+      BOTH past and future interview dates for a job — a job can have multiple interviews
+      recorded over time. Populate/append to it going forward whenever the user reports a new
+      interview date for a tracked job (new entry appended, not overwritten). Only add an
+      entry with an explicit date the user (or a feedback comment) actually states — never
+      fabricate or estimate a date.
+    - "next_step": free-text description of what happens next for this job (e.g. "Waiting to
+      hear back from hiring manager", "Prepare case study for round 2"). Leave absent/blank
+      until the user provides one.
+    - "next_step_due_date": optional "YYYY-MM-DD" — when set, used for chronological sorting
+      in the 🔝 Top Priority section's "Next Steps" card; when absent/null, the item sorts to
+      the end of that card, in whatever order it naturally occurs.
+    These three fields feed the 🔝 Top Priority section (see rule a-1 under step 9 above) —
+    see that rule for exactly how "interviews", "next_step", and "next_step_due_date" are
+    rendered into the Interviews Timeline / Next Steps cards.
 10c. LOCATION FIELD — inputs/job_feedback.json entries have an optional "location" field
     (added 8 July 2026, per the CANONICAL RULE — UNIQUE ROLE IDENTIFIER section above),
     used together with company+title to match a feedback entry to the correct report job
@@ -1268,7 +1795,7 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
     field as follows:
     - If the user's command includes a LinkedIn URL → use it directly.
     - If no URL is provided → search LinkedIn using Company Name + Title
-      (via Chrome browser tools: navigate to
+      (via the connected browser tool: navigate to
       https://www.linkedin.com/jobs/search/?keywords="TITLE"+"COMPANY"
       and extract the currentJobId from the URL of the first exact match).
       Set "url" to https://www.linkedin.com/jobs/view/<jobId>/
@@ -1293,7 +1820,7 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
     hiring manager's name or LinkedIn profile URL in their command. Rules:
     - If the user provides both name and URL → use both directly.
     - If the user provides only a LinkedIn URL (no name) → navigate to that profile
-      via Chrome browser tools and extract the full name from the page title or
+      via the connected browser tool and extract the full name from the page title or
       heading. Set hiring_manager_name to the resolved name.
     - If the user provides only a name (no URL) → set hiring_manager_name and
       leave hiring_manager_linkedin blank.
@@ -1312,7 +1839,7 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
     - The company name of an existing "follow-up" entry is changed.
     Process to build L1_contacts_url:
     1. Navigate to https://www.linkedin.com/search/results/companies/?keywords=COMPANY_NAME
-       via Chrome browser tools.
+       via the connected browser tool.
     2. Identify the correct company in the results (match name and industry context).
     3. Navigate to that company's LinkedIn page.
     4. Extract the numeric company ID from the page DOM:
@@ -1332,7 +1859,7 @@ Every morning, scan the last N days of emails (as defined by alerts_lookback_day
 
     NOGO SHORTCUT — SKIP ALL LOOKUPS (added 9 July 2026, per user request: NOGO feedback
     is simple and frequent, and must never trigger the URL-search or L1_contacts browsing
-    process above, or any other Chrome/LinkedIn lookup). Whenever the user reports a job as
+    process above, or any other browser/LinkedIn lookup). Whenever the user reports a job as
     NOGO (status_override "skip"), do ONLY the following — no browser tools, no LinkedIn
     searches, no L1_contacts lookup, nothing else:
     1. Look up the job's job_id/url/location directly from cache/jobs_seen_cache.json (and
